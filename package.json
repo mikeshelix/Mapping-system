@@ -1,0 +1,25 @@
+{
+  "name": "mapping-system",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.26.1",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "db:up": "docker compose up -d db",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter @hazard/db migrate",
+    "db:seed": "pnpm --filter @hazard/db seed",
+    "dev:web": "pnpm --filter @hazard/web dev",
+    "dev:worker": "pnpm --filter @hazard/worker dev",
+    "build": "pnpm --filter @hazard/web build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "dotenv": "^16.4.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.0"
+  }
+}
