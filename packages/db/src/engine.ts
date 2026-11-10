@@ -184,7 +184,8 @@ async function loadRules(sql: Sql, orgIds: string[]): Promise<RuleInput[]> {
     SELECT r.id, r.organization_id, r.enabled, r.hazard_types, r.min_severity, r.scope, r.recipient_mode, r.channels,
       COALESCE((SELECT array_agg(client_id::text) FROM alert_rule_clients WHERE rule_id = r.id), '{}') AS client_ids,
       COALESCE((SELECT array_agg(property_id::text) FROM alert_rule_properties WHERE rule_id = r.id), '{}') AS property_ids,
-      COALESCE((SELECT array_agg(contact_id::text) FROM alert_rule_contacts WHERE rule_id = r.id), '{}') AS contact_ids
+      COALESCE((SELECT array_agg(contact_id::text) FROM alert_rule_contacts WHERE rule_id = r.id), '{}') AS contact_ids,
+      COALESCE((SELECT array_agg(zip) FROM alert_rule_zips WHERE rule_id = r.id), '{}') AS zip_codes
     FROM alert_rules r WHERE r.organization_id = ANY(${orgIds}::uuid[]) AND r.enabled
     ORDER BY r.created_at`;
   return rows.map((r) => ({
@@ -196,13 +197,14 @@ async function loadRules(sql: Sql, orgIds: string[]): Promise<RuleInput[]> {
     scope: r.scope,
     clientIds: r.client_ids,
     propertyIds: r.property_ids,
+    zipCodes: r.zip_codes,
     recipientMode: r.recipient_mode,
     contactIds: r.contact_ids,
     channels: r.channels,
   }));
 }
 
-async function loadContacts(sql: Sql, orgIds: string[]): Promise<ContactInput[]> {
+export async function loadContacts(sql: Sql, orgIds: string[]): Promise<ContactInput[]> {
   const rows = await sql`
     SELECT c.id, c.organization_id, c.client_id, c.email, c.mobile, c.sms_opt_in, c.sms_opt_out_at,
       COALESCE((SELECT array_agg(property_id::text) FROM contact_properties WHERE contact_id = c.id), '{}') AS property_ids
@@ -252,7 +254,7 @@ export async function queueNotificationsForEvent(
 
   const plans = planNotifications({
     event: { hazardType: event.hazard_type, severity: event.severity as Severity },
-    impacts: impacts.map((i) => ({ propertyId: i.property_id, clientId: i.client_id, organizationId: i.organization_id })),
+    impacts: impacts.map((i) => ({ propertyId: i.property_id, clientId: i.client_id, organizationId: i.organization_id, zip: i.zip })),
     rules,
     contacts,
     alreadyNotified: new Map(

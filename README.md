@@ -5,8 +5,8 @@ Answers one question: **which of our clients' properties are affected right now,
 Staff plot client properties on a map. A worker watches free US government hazard feeds, matches each hazard
 against the properties with PostGIS, and emails the right contacts.
 
-Status: **Phase 1 (core alerting)** and **Phase 2 (more hazards, map layers, impact list, SMS)** are built.
-Phases 3 and 4 are not started.
+Status: **Phase 1 (core alerting)**, **Phase 2 (more hazards, map layers, impact list, SMS)** and
+**Phase 3 (rule builder, rule preview, exposure estimates, CSV export)** are built. Phase 4 is not started.
 
 ## What is in Phase 1
 
@@ -28,6 +28,36 @@ Phases 3 and 4 are not started.
 - Text messages through Twilio: only to contacts with a recorded opt-in, STOP replies honoured,
   and per-event and per-day send caps an admin can change
 - Settings screen: text message caps, and (for platform admins) feed switches and matching distances
+
+## What is in Phase 3
+
+- **Rule builder** with nine hazard templates (severe storms, hail, hurricane, flooding, wildfire, winter,
+  earthquake, FEMA declarations, anything severe), severity thresholds, and coverage by all properties, chosen
+  clients, chosen ZIP codes or chosen properties. Existing rules can be edited.
+- **Rule preview**: replays the stored hazards of the last 90 days through the rule as filled in, and shows how
+  many hazards, properties, contacts, emails and texts it would have produced. Nothing is saved or sent.
+- **Estimated exposure** on the Impacts screen: declared value times a percentage per severity, set in Settings
+  (defaults: minor 1%, moderate 5%, severe 15%, extreme 40%). Always labelled as an estimate.
+- **CSV export** of properties, impacts and exposure.
+
+### How the rule preview works
+
+- It re-matches today's properties against the stored geometry of every hazard first seen in the last 90 days,
+  so properties added after a hazard still count. It answers "what would this rule do for the portfolio I have now".
+- It follows the live engine: one message per contact per hazard per channel, and a follow-up only where a
+  later stored version of the hazard had a higher severity.
+- Limits: it uses today's contacts and opt-ins, not those of the time; text counts are before send caps; and it
+  can only reach back as far as the system has been collecting hazards (the screen says so when that is under 90 days).
+
+### Exports
+
+| Download | Contents |
+|---|---|
+| `/api/export/properties` | Every property, with coordinates and how it was located |
+| `/api/export/impacts` | Properties affected by active hazards. Add `?days=90` for history |
+| `/api/export/exposure` | One row per affected property: worst severity, declared value, assumed percentage, estimate |
+
+All accept `?client=<id>` and `?severity=<minimum>`. Text that a spreadsheet would run as a formula is neutralized.
 
 ## Layout
 
@@ -182,8 +212,6 @@ Twilio is a paid, usage-based service and US numbers must be registered (A2P 10D
 
 ## Known limits in Phase 1
 
-- Rules can cover all properties or chosen clients. The engine also supports per-property rules, but the screen
-  for that comes with the Phase 3 rule builder.
 - Geocoding runs inside the request; a 10,000-row file can take several minutes.
 - The Census geocoder places addresses by interpolating along the street, so points can be off by a building or two.
 - USGS imagery is published to zoom 16 and is stretched beyond that.
@@ -192,4 +220,5 @@ Twilio is a paid, usage-based service and US numbers must be registered (A2P 10D
 - The FIRMS feed is written to the documented API but has not run against live data (no key).
 - No hail or storm-report rows were live when this was built, so those parsers are verified by tests and by a real
   (hail-free) MRMS file, not by live matches.
+- Exposure percentages are planning assumptions set by an admin; they are not derived from loss data.
 - NWS alerts are drawn on the map only where they touch your properties; other sources are drawn nationwide.

@@ -109,6 +109,9 @@ export default async function PropertiesPage({ searchParams }: { searchParams: S
           <span className="muted" style={{ alignSelf: 'flex-end' }}>
             {total.toLocaleString()} propert{total === 1 ? 'y' : 'ies'}
           </span>
+          <a className="button secondary" style={{ alignSelf: 'flex-end', marginLeft: 'auto' }} href={`/api/export/properties${clientFilter ? `?client=${clientFilter}` : ''}`}>
+            Export properties (CSV)
+          </a>
         </form>
         <table>
           <thead>

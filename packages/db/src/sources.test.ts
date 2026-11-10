@@ -268,3 +268,53 @@ describe('text messages', () => {
     expect(texts[1]!.error).toMatch(/daily/);
   });
 });
+
+describe('rule preview against stored events', () => {
+  const draft = (o: Record<string, unknown> = {}) => ({
+    id: 'draft', organizationId: orgId, enabled: true, hazardTypes: [] as string[], minSeverity: 'moderate' as const, scope: 'all' as const,
+    clientIds: [], propertyIds: [], zipCodes: [] as string[], recipientMode: 'linked' as const, contactIds: [], channels: ['email' as const], ...o,
+  });
+
+  it('replays stored events for the current portfolio, including past and zone-based events', async () => {
+    const { previewRule } = await import('./reporting');
+    await addProperty('Hail site', -100.9, 39.13);
+    await addProperty('County site', -85.5, 30.2);
+    await addProperty('Untouched', -70, 44);
+    // An expired point event, a zone-based event, and one outside the 90-day window.
+    await upsertSourceEvent(sql, pointEvent(), { bufferMeters: 8000 });
+    await sql`UPDATE hazard_events SET status = 'expired'`;
+    await upsertSourceEvent(sql, pointEvent({ source: 'fema', key: 'DR-1', hazardType: 'disaster_declaration', point: undefined, zoneCodes: ['FLC005'] }));
+    await upsertZone(sql, { code: 'FLC005', kind: 'county', name: 'Bay', state: 'FL', geometry: square(-86, 30, 1) });
+    await upsertSourceEvent(sql, pointEvent({ key: 'hail:old' }), { bufferMeters: 8000 });
+    await sql`UPDATE hazard_events SET first_seen_at = now() - interval '120 days' WHERE source_event_id = 'hail:old'`;
+
+    const all = await previewRule(sql, draft());
+    expect(all).toMatchObject({ days: 90, eventsConsidered: 2, eventsMatched: 2, propertiesAffected: 2, contactsNotified: 1, messages: { email: 2, sms: 0 } });
+    expect(all.historyStart).not.toBeNull();
+
+    const hailOnly = await previewRule(sql, draft({ hazardTypes: ['hail'] }));
+    expect(hailOnly).toMatchObject({ eventsMatched: 1, propertiesAffected: 1 });
+
+    const strict = await previewRule(sql, draft({ minSeverity: 'extreme' }));
+    expect(strict.eventsMatched).toBe(0);
+  });
+
+  it('counts a follow-up for an event whose stored versions escalated', async () => {
+    const { previewRule } = await import('./reporting');
+    await addProperty('Hail site', -100.9, 39.13);
+    await upsertSourceEvent(sql, pointEvent({ severity: 'moderate' }), { bufferMeters: 8000 });
+    await upsertSourceEvent(sql, pointEvent({ severity: 'extreme', eventName: 'Hail report: 3.00 in' }), { bufferMeters: 8000 });
+    const preview = await previewRule(sql, draft());
+    expect(preview.messages.email).toBe(2);
+    expect(preview.followUps).toBe(1);
+  });
+
+  it('applies ZIP scope using each property\'s ZIP', async () => {
+    const { previewRule } = await import('./reporting');
+    const id = await addProperty('Hail site', -100.9, 39.13);
+    await sql`UPDATE properties SET zip = '67748' WHERE id = ${id}`;
+    await upsertSourceEvent(sql, pointEvent(), { bufferMeters: 8000 });
+    expect((await previewRule(sql, draft({ scope: 'zips', zipCodes: ['67748'] }))).eventsMatched).toBe(1);
+    expect((await previewRule(sql, draft({ scope: 'zips', zipCodes: ['99999'] }))).eventsMatched).toBe(0);
+  });
+});

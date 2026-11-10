@@ -20,6 +20,23 @@ export async function saveSmsCaps(form: FormData): Promise<void> {
   back('/settings', 'notice', 'Text message caps saved.');
 }
 
+/** Share of declared value assumed at risk for each severity, used for the exposure estimate. */
+export async function saveExposureFactors(form: FormData): Promise<void> {
+  const admin = await requireAdmin();
+  const factors: Record<string, number> = {};
+  for (const severity of ['minor', 'moderate', 'severe', 'extreme']) {
+    const percent = Number(str(form, `factor_${severity}`));
+    if (!Number.isFinite(percent) || percent < 0 || percent > 100) back('/settings', 'error', 'Each percentage must be between 0 and 100.');
+    factors[severity] = Math.round(percent * 100) / 10_000;
+  }
+  await getSql()`
+    UPDATE organizations SET settings = settings || ${JSON.stringify({ exposureFactors: factors })}::text::jsonb
+    WHERE id = ${admin.organizationId}`;
+  revalidatePath('/settings');
+  revalidatePath('/impacts');
+  back('/settings', 'notice', 'Exposure percentages saved.');
+}
+
 /** Feed switches and matching distances apply to every organization, so only platform admins may change them. */
 export async function saveFeedSetting(form: FormData): Promise<void> {
   const admin = await requireAdmin();
