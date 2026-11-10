@@ -14,6 +14,10 @@ export const HAZARD_TYPES = [
   'cold',
   'fog',
   'marine',
+  'hail',
+  'wildfire',
+  'earthquake',
+  'disaster_declaration',
   'other',
 ] as const;
 export type HazardType = (typeof HAZARD_TYPES)[number];
@@ -32,6 +36,10 @@ export const HAZARD_LABELS: Record<HazardType, string> = {
   cold: 'Cold',
   fog: 'Fog',
   marine: 'Marine',
+  hail: 'Hail',
+  wildfire: 'Wildfire',
+  earthquake: 'Earthquake',
+  disaster_declaration: 'FEMA declaration',
   other: 'Other',
 };
 

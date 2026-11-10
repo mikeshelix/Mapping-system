@@ -110,17 +110,23 @@ interface ZoneResponse {
  * Bounded per run and spaced out to stay well within NWS rate limits.
  */
 export async function fetchMissingZones(sql: Sql, maxPerRun = 40): Promise<number> {
+  // NWS alerts name the URL of each zone. Other sources (FEMA) only give a county code,
+  // whose URL follows from the code: two-letter state, "C", three-digit county FIPS.
   const rows = await sql`
-    SELECT DISTINCT u.url FROM hazard_events e,
-      jsonb_array_elements_text(COALESCE(e.raw->'properties'->'affectedZones', '[]'::jsonb)) AS u(url)
+    SELECT DISTINCT ON (c.code) COALESCE(
+      (SELECT u.url FROM jsonb_array_elements_text(
+         CASE WHEN jsonb_typeof(e.raw->'properties'->'affectedZones') = 'array' THEN e.raw->'properties'->'affectedZones' ELSE '[]'::jsonb END) AS u(url)
+       WHERE split_part(u.url, '/', -1) = c.code LIMIT 1),
+      CASE WHEN c.code ~ '^[A-Z]{2}C[0-9]{3}$' THEN ${ZONE_URL_PREFIX} || 'county/' || c.code
+           WHEN c.code ~ '^[A-Z]{2}Z[0-9]{3}$' THEN ${ZONE_URL_PREFIX} || 'forecast/' || c.code END) AS url
+    FROM hazard_events e, unnest(e.zone_codes) AS c(code)
     WHERE e.status = 'active' AND e.zones_pending
-      AND split_part(u.url, '/', -1) = ANY(e.zone_codes)
-      AND NOT EXISTS (SELECT 1 FROM geo_zones z WHERE z.code = split_part(u.url, '/', -1))
+      AND NOT EXISTS (SELECT 1 FROM geo_zones z WHERE z.code = c.code)
     LIMIT ${maxPerRun}`;
 
   let fetched = 0;
   for (const { url } of rows as unknown as Array<{ url: string }>) {
-    if (!url.startsWith(ZONE_URL_PREFIX)) continue;
+    if (!url || !url.startsWith(ZONE_URL_PREFIX)) continue;
     const parts = url.split('/');
     const code = parts.at(-1)!;
     const kind = parts.at(-2) ?? 'forecast';

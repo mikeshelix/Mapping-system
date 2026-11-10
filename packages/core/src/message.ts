@@ -98,3 +98,18 @@ ${rows}
 
   return { subject, html, text: textLines.join('\n') };
 }
+
+/**
+ * Text-message version: short, but still states hazard, severity, properties, source,
+ * map link, the disclaimer and how to opt out.
+ */
+export function renderHazardSms(m: Pick<MessageInput, 'eventName' | 'severity' | 'sourceName' | 'isEscalation' | 'properties' | 'mapUrl'>): string {
+  const count = m.properties.length;
+  const names = m.properties.slice(0, 2).map((p) => p.name).join(', ');
+  const more = count > 2 ? ` +${count - 2} more` : '';
+  return (
+    `${m.isEscalation ? 'UPGRADED: ' : ''}${m.eventName} (${SEVERITY_LABELS[m.severity]}) affects ` +
+    `${count} propert${count === 1 ? 'y' : 'ies'}: ${names}${more}. Source: ${m.sourceName}. Map: ${m.mapUrl} ` +
+    `Supplements, does not replace, official warnings. Reply STOP to opt out.`
+  );
+}

@@ -64,6 +64,48 @@ export class ConsoleEmailProvider implements EmailProvider {
   }
 }
 
+/**
+ * Twilio SMS.
+ * Docs: https://www.twilio.com/docs/messaging/api/message-resource
+ * Twilio itself blocks sends to numbers that replied STOP (error 21610).
+ */
+export class TwilioSmsProvider implements SmsProvider {
+  readonly name = 'twilio';
+  constructor(
+    private accountSid: string,
+    private authToken: string,
+    private sender: { from?: string; messagingServiceSid?: string },
+  ) {}
+
+  async send(message: { to: string; text: string }): Promise<{ messageId: string | null }> {
+    const body = new URLSearchParams({ To: message.to, Body: message.text });
+    if (this.sender.messagingServiceSid) body.set('MessagingServiceSid', this.sender.messagingServiceSid);
+    else if (this.sender.from) body.set('From', this.sender.from);
+    const res = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${this.accountSid}/Messages.json`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${this.accountSid}:${this.authToken}`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+      signal: AbortSignal.timeout(20_000),
+    });
+    const json = (await res.json().catch(() => ({}))) as { sid?: string; code?: number; message?: string };
+    if (!res.ok) throw new Error(`Twilio returned HTTP ${res.status}${json.code ? ` (code ${json.code})` : ''}: ${json.message ?? ''}`);
+    return { messageId: json.sid ?? null };
+  }
+}
+
+/** Null when Twilio is not configured; SMS then stays switched off everywhere. */
+export function createSmsProvider(): SmsProvider | null {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM_NUMBER;
+  const service = process.env.TWILIO_MESSAGING_SERVICE_SID;
+  if (!sid || !token || !(from || service)) return null;
+  return new TwilioSmsProvider(sid, token, { from, messagingServiceSid: service });
+}
+
 export function createEmailProvider(): EmailProvider {
   const key = process.env.BREVO_API_KEY;
   if (!key) return new ConsoleEmailProvider();
