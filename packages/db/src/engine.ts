@@ -421,7 +421,8 @@ export interface FeedHealth {
 
 export async function getFeedHealth(sql: Sql): Promise<FeedHealth[]> {
   const rows = await sql`
-    SELECT *, (last_success_at IS NULL OR last_success_at < now() - make_interval(secs => stale_after_seconds)) AS stale
+    -- A feed that has never succeeded is measured from when it was first registered.
+    SELECT *, (COALESCE(last_success_at, created_at) < now() - make_interval(secs => stale_after_seconds)) AS stale
     FROM feed_status ORDER BY feed`;
   return rows.map((r) => ({
     feed: r.feed,

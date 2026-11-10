@@ -255,7 +255,8 @@ CREATE TABLE feed_status (
   consecutive_failures  int NOT NULL DEFAULT 0,
   etag                  text,
   stale_after_seconds   int NOT NULL DEFAULT 600,
-  stale_alerted_at      timestamptz
+  stale_alerted_at      timestamptz,
+  created_at            timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE ingestion_runs (
