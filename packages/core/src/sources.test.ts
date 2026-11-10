@@ -16,6 +16,8 @@ import {
   parseUsgsEarthquakes,
   parseWfigsPerimeters,
   renderHazardSms,
+  normalizeUsPhone,
+  classifyInboundSms,
   tornadoSeverity,
   wildfireSeverity,
   windFieldSeverity,
@@ -242,5 +244,27 @@ describe('text message', () => {
       'Tornado Warning (Extreme) affects 4 properties: Site 1, Site 2 +2 more. Source: National Weather Service. ' +
         'Map: https://app.example.test/?event=abc Supplements, does not replace, official warnings. Reply STOP to opt out.',
     );
+  });
+});
+
+describe('phone numbers and inbound keywords', () => {
+  it('normalizes US numbers to E.164 and rejects the rest', () => {
+    expect(normalizeUsPhone('(555) 234-5678')).toBe('+15552345678');
+    expect(normalizeUsPhone('1-555-234-5678')).toBe('+15552345678');
+    expect(normalizeUsPhone('+1 555 234 5678')).toBe('+15552345678');
+    expect(normalizeUsPhone('234-5678')).toBeNull();
+    expect(normalizeUsPhone('155-234-5678')).toBeNull();
+    expect(normalizeUsPhone('+44 20 7946 0958')).toBeNull();
+  });
+
+  it('recognizes opt-out and opt-in replies', () => {
+    for (const word of ['STOP', ' stop ', 'Unsubscribe', 'CANCEL', 'end', 'QUIT', 'STOPALL', 'revoke', 'OPTOUT']) {
+      expect(classifyInboundSms(word)).toBe('stop');
+    }
+    expect(classifyInboundSms('START')).toBe('start');
+    expect(classifyInboundSms('unstop')).toBe('start');
+    expect(classifyInboundSms('HELP')).toBe('help');
+    expect(classifyInboundSms('please stop texting me')).toBe('other'); // only an exact keyword counts
+    expect(classifyInboundSms('anything', 'STOP')).toBe('stop'); // Twilio's own classification wins
   });
 });

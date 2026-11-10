@@ -19,7 +19,7 @@ export async function GET(request: Request) {
   const sql = getSql();
   const org = user.organizationId;
 
-  const [clients, properties, events] = await Promise.all([
+  const [clients, properties, events, layers] = await Promise.all([
     sql`SELECT id, name, color FROM clients WHERE organization_id = ${org} ORDER BY name`,
     sql`
       SELECT p.id, p.name, p.client_id, c.name AS client_name, c.color, p.property_type,
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
         ST_X(p.location) AS lon, ST_Y(p.location) AS lat
       FROM properties p JOIN clients c ON c.id = p.client_id WHERE p.organization_id = ${org}`,
     sql`
-      SELECT e.id, e.event_name, e.hazard_type, e.severity, e.status, e.headline, e.area_desc, e.ends_at, e.source_url,
+      SELECT e.id, e.source, e.event_name, e.hazard_type, e.severity, e.status, e.headline, e.area_desc, e.ends_at, e.source_url,
         array_agg(i.property_id::text) AS property_ids,
         ST_AsGeoJSON(ST_SimplifyPreserveTopology(
           COALESCE(e.geometry, (SELECT ST_Union(z.geometry) FROM geo_zones z WHERE z.code = ANY(e.zone_codes))), 0.002), 5) AS geometry
@@ -36,6 +36,15 @@ export async function GET(request: Request) {
       WHERE e.status = 'active' ${focusId ? sql`OR e.id = ${focusId}` : sql``}
       GROUP BY e.id
       ORDER BY e.severity DESC, count(*) DESC`,
+    // Every active hazard from the non-NWS sources, nationwide, for the toggleable map layers.
+    // (NWS alerts are only drawn where they touch this organization's properties: there are hundreds.)
+    sql`
+      SELECT e.id, e.source, e.event_name, e.severity, e.headline,
+        ST_AsGeoJSON(ST_SimplifyPreserveTopology(
+          COALESCE(e.geometry, (SELECT ST_Union(z.geometry) FROM geo_zones z WHERE z.code = ANY(e.zone_codes))), 0.003), 4) AS geometry
+      FROM hazard_events e
+      WHERE e.status = 'active' AND e.source <> 'nws'
+      ORDER BY e.severity, e.first_seen_at DESC LIMIT 5000`,
   ]);
 
   const worst = new Map<string, { severity: string; rank: number }>();
@@ -69,6 +78,7 @@ export async function GET(request: Request) {
     },
     events: events.map((e) => ({
       id: e.id,
+      source: e.source,
       name: e.event_name,
       hazardType: e.hazard_type,
       severity: e.severity,
@@ -86,7 +96,17 @@ export async function GET(request: Request) {
         .map((e) => ({
           type: 'Feature',
           geometry: JSON.parse(e.geometry),
-          properties: { id: e.id, name: e.event_name, severity: e.severity },
+          properties: { id: e.id, name: e.event_name, severity: e.severity, source: e.source },
+        })),
+    },
+    layers: {
+      type: 'FeatureCollection',
+      features: layers
+        .filter((e) => e.geometry)
+        .map((e) => ({
+          type: 'Feature',
+          geometry: JSON.parse(e.geometry),
+          properties: { id: e.id, name: e.event_name, severity: e.severity, source: e.source, headline: e.headline },
         })),
     },
   });

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
-import { DISCLAIMER, HAZARD_LABELS, SEVERITY_COLORS, SEVERITY_LABELS, type HazardType, type Severity } from '@hazard/core';
+import { DISCLAIMER, HAZARD_LABELS, SEVERITY_COLORS, SEVERITY_LABELS, SOURCE_NAMES, type HazardType, type Severity, type SourceId } from '@hazard/core';
 import { BASE_STYLE_URL, addSatelliteLayer, firstLabelLayer, setSatellite } from './basemap';
 
 interface Client {
@@ -12,6 +12,7 @@ interface Client {
 }
 interface HazardEvent {
   id: string;
+  source: SourceId;
   name: string;
   hazardType: HazardType;
   severity: Severity;
@@ -27,7 +28,33 @@ interface MapData {
   properties: GeoJSON.FeatureCollection<GeoJSON.Point>;
   events: HazardEvent[];
   hazards: GeoJSON.FeatureCollection;
+  layers: GeoJSON.FeatureCollection;
 }
+
+/** Map layers a user can switch on and off, one per hazard source. */
+const LAYERS: Array<{ source: SourceId; label: string; note?: string }> = [
+  { source: 'nws', label: 'NWS alerts', note: 'where they touch your properties' },
+  { source: 'mesh', label: 'Hail (radar estimate)' },
+  { source: 'spc', label: 'Storm reports', note: 'hail, wind, tornado' },
+  { source: 'nhc', label: 'Hurricanes', note: 'cone and wind field' },
+  { source: 'wfigs', label: 'Wildfire perimeters' },
+  { source: 'firms', label: 'Fire detections', note: 'satellite' },
+  { source: 'nwps', label: 'River gauges in flood' },
+  { source: 'usgs', label: 'Earthquakes' },
+  { source: 'fema', label: 'FEMA declarations' },
+];
+const DEFAULT_OFF: SourceId[] = ['fema'];
+
+/**
+ * Radar: NOAA MRMS base reflectivity mosaic, served by NOAA as WMS. Free, no key.
+ * https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows
+ */
+const radarTiles = (stamp: number) =>
+  'https://opengeo.ncep.noaa.gov/geoserver/conus/conus_bref_qcd/ows?service=WMS&version=1.1.1&request=GetMap' +
+  '&layers=conus_bref_qcd&styles=&format=image/png&transparent=true&srs=EPSG:3857&width=256&height=256' +
+  `&bbox={bbox-epsg-3857}&_=${stamp}`;
+/** Radar updates about every two minutes; a new stamp makes the map fetch fresh tiles. */
+const radarStamp = () => Math.floor(Date.now() / 120_000);
 
 const REFRESH_MS = 60_000;
 const EMPTY: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
@@ -70,6 +97,8 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
   const [satellite, setSat] = useState(false);
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(focusEventId);
+  const [layersOff, setLayersOff] = useState<Set<SourceId>>(new Set(DEFAULT_OFF));
+  const [radar, setRadar] = useState(false);
 
   // ---- map setup (once)
   useEffect(() => {
@@ -82,6 +111,8 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
     map.on('load', () => {
       addSatelliteLayer(map);
       const below = firstLabelLayer(map);
+      map.addSource('radar', { type: 'raster', tiles: [radarTiles(radarStamp())], tileSize: 256, attribution: 'Radar: NOAA MRMS' });
+      map.addLayer({ id: 'radar', type: 'raster', source: 'radar', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.65 } }, below);
       map.addSource('hazards', { type: 'geojson', data: EMPTY });
       map.addSource('properties', { type: 'geojson', data: EMPTY });
       map.addLayer(
@@ -149,8 +180,22 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
       map.on('click', 'hazard-fill', (e) => {
         // Property clicks take priority over the polygon underneath.
         if (map.queryRenderedFeatures(e.point, { layers: ['property-dot'] }).length) return;
-        const id = e.features?.[0]?.properties?.id as string | undefined;
-        if (id) setSelected(id);
+        const props = e.features?.[0]?.properties as Record<string, string> | undefined;
+        if (!props?.id) return;
+        if (dataRef.current?.events.some((ev) => ev.id === props.id)) {
+          setSelected(props.id);
+          return;
+        }
+        // A hazard that touches none of this organization's properties: describe it in place.
+        new maplibregl.Popup({ maxWidth: '320px' })
+          .setLngLat(e.lngLat)
+          .setHTML(
+            `<strong>${escapeHtml(props.name ?? '')}</strong><div>${SEVERITY_LABELS[props.severity as Severity] ?? ''}</div>` +
+              `<div>${escapeHtml(props.headline ?? '')}</div>` +
+              `<div style="color:#6b7280;margin-top:4px">Source: ${escapeHtml(SOURCE_NAMES[props.source as SourceId] ?? props.source ?? '')}</div>` +
+              `<div style="color:#6b7280">None of your properties are affected.</div>`,
+          )
+          .addTo(map);
       });
       for (const layer of ['property-dot', 'hazard-fill']) {
         map.on('mouseenter', layer, () => (map.getCanvas().style.cursor = 'pointer'));
@@ -193,7 +238,15 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
     const map = mapRef.current;
     if (!map || !ready || !data) return;
     (map.getSource('properties') as maplibregl.GeoJSONSource).setData(data.properties);
-    (map.getSource('hazards') as maplibregl.GeoJSONSource).setData(data.hazards);
+    // Hazards touching this organization's properties, plus every other active hazard for the layers.
+    const own = new Set(data.events.map((e) => e.id));
+    (map.getSource('hazards') as maplibregl.GeoJSONSource).setData({
+      type: 'FeatureCollection',
+      features: [...data.layers.features.filter((f) => !own.has(f.properties?.id)), ...data.hazards.features],
+    });
+    if (map.getLayoutProperty('radar', 'visibility') === 'visible') {
+      (map.getSource('radar') as maplibregl.RasterTileSource).setTiles([radarTiles(radarStamp())]);
+    }
     if (!fitted.current && !focusEventId && data.properties.features.length) {
       fitted.current = true;
       const b = new maplibregl.LngLatBounds();
@@ -211,13 +264,29 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
     map.setFilter('property-impact', ['all', ['!=', ['get', 'impact'], 'none'], visible]);
   }, [hidden, ready]);
 
+  // ---- layer toggles
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const shown: maplibregl.FilterSpecification = ['!', ['in', ['get', 'source'], ['literal', [...layersOff]]]];
+    map.setFilter('hazard-fill', shown);
+    map.setFilter('hazard-line', shown);
+  }, [layersOff, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    if (radar) (map.getSource('radar') as maplibregl.RasterTileSource).setTiles([radarTiles(radarStamp())]);
+    map.setLayoutProperty('radar', 'visibility', radar ? 'visible' : 'none');
+  }, [radar, ready]);
+
   // ---- selected event: outline it and move the map to it
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready) return;
     map.setFilter('hazard-selected', ['==', ['get', 'id'], selected ?? '']);
     if (!selected || !data) return;
-    const feature = data.hazards.features.find((f) => f.properties?.id === selected);
+    const feature = [...data.hazards.features, ...data.layers.features].find((f) => f.properties?.id === selected);
     const b = feature ? bounds(feature.geometry) : new maplibregl.LngLatBounds();
     if (!feature) {
       // No polygon yet (zone shapes still loading): frame the affected properties instead.
@@ -290,7 +359,7 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
                   {e.headline && <div>{e.headline}</div>}
                   {e.area && <div className="muted">Area: {e.area}</div>}
                   {e.endsAt && <div className="muted">Until {new Date(e.endsAt).toLocaleString()}</div>}
-                  <div className="muted">Source: National Weather Service</div>
+                  <div className="muted">Source: {SOURCE_NAMES[e.source] ?? e.source}</div>
                   {e.sourceUrl && (
                     <a href={e.sourceUrl} target="_blank" rel="noreferrer" onClick={(ev) => ev.stopPropagation()}>
                       Official alert
@@ -300,6 +369,30 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
               )}
             </button>
           ))}
+        </section>
+        <section>
+          <h2>Map layers</h2>
+          {LAYERS.map((l) => (
+            <label className="check" key={l.source} style={{ marginBottom: 4 }}>
+              <input
+                type="checkbox"
+                checked={!layersOff.has(l.source)}
+                onChange={() =>
+                  setLayersOff((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(l.source)) next.delete(l.source);
+                    else next.add(l.source);
+                    return next;
+                  })
+                }
+              />
+              {l.label} {l.note && <span className="muted small">({l.note})</span>}
+            </label>
+          ))}
+          <label className="check" style={{ marginBottom: 4 }}>
+            <input type="checkbox" checked={radar} onChange={() => setRadar((v) => !v)} />
+            Radar <span className="muted small">(live reflectivity)</span>
+          </label>
         </section>
         <section>
           <h2>Clients</h2>

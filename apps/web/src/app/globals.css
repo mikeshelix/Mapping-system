@@ -18,9 +18,9 @@ h1 { font-size: 20px; margin: 0 0 16px; }
 h2 { font-size: 15px; margin: 0 0 10px; }
 
 .shell { display: flex; flex-direction: column; height: 100vh; }
-.topbar { display: flex; align-items: center; gap: 4px; padding: 0 16px; height: 48px; background: #0f172a; color: #fff; flex: none; }
+.topbar { display: flex; align-items: center; gap: 2px; padding: 0 16px; min-height: 48px; flex-wrap: wrap; background: #0f172a; color: #fff; flex: none; }
 .topbar .brand { font-weight: 600; margin-right: 16px; }
-.topbar a { color: #cbd5e1; padding: 6px 10px; border-radius: 6px; }
+.topbar a { color: #cbd5e1; padding: 6px 8px; border-radius: 6px; white-space: nowrap; }
 .topbar a:hover { background: #1e293b; color: #fff; text-decoration: none; }
 .topbar .spacer { flex: 1; }
 .topbar .who { color: #94a3b8; font-size: 12px; margin-right: 8px; }
