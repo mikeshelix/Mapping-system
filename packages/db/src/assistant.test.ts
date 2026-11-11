@@ -158,9 +158,15 @@ describe('assistant tools: reading the portfolio', () => {
 
   it('summarizes notifications by contact name without exposing addresses', async () => {
     const [contact] = await sql`INSERT INTO contacts (organization_id, client_id, name, email, mobile) VALUES (${org}, ${acme}, 'Pat Tester', 'pat@example.test', '+15555550100') RETURNING id`;
-    await sql`
+    const [note] = await sql`
       INSERT INTO notifications (organization_id, contact_id, hazard_event_id, channel, severity, recipient, body_text, status, sent_at)
-      VALUES (${org}, ${contact!.id}, ${tornado}, 'email', 'extreme', 'pat@example.test', 'body', 'sent', now())`;
+      VALUES (${org}, ${contact!.id}, ${tornado}, 'email', 'extreme', 'pat@example.test', 'body', 'sent', now()) RETURNING id`;
+    await sql`
+      INSERT INTO notification_properties (notification_id, contact_id, hazard_event_id, property_id, channel, severity)
+      VALUES (${note!.id}, ${contact!.id}, ${tornado}, ${p.warehouse!}, 'email', 'extreme')`;
+    // Narrowing to a property keeps messages that covered it and drops the rest.
+    expect((await run('notification_summary', { property_id: p.warehouse })).result.most_recent).toHaveLength(1);
+    expect((await run('notification_summary', { property_id: p.office })).result.most_recent).toHaveLength(0);
     const { result } = await run('notification_summary', { days: 7 });
     expect(result.counts).toEqual([{ channel: 'email', status: 'sent', messages: 1, contacts: 1 }]);
     expect(result.most_recent[0]).toMatchObject({ contact: 'Pat Tester', hazard: 'Tornado Warning', channel: 'email' });

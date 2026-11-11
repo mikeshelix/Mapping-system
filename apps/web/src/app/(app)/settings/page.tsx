@@ -12,6 +12,7 @@ import {
 } from '@hazard/core';
 import { areaSearchesToday, assistantUsageThisMonth, getSql, readSmsCaps } from '@hazard/db';
 import { requireAdmin } from '@/lib/auth';
+import { assistantConnected as assistantConnectedCheck } from '@/lib/assistantAuth';
 import { Flash, type Search } from '@/components/Flash';
 import { saveExposureFactors, saveFeedSetting, saveSmsCaps, saveUsageLimits } from '@/app/actions/settings';
 
@@ -35,7 +36,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
     assistantUsageThisMonth(sql, admin.organizationId),
     areaSearchesToday(sql, admin.organizationId),
   ]);
-  const assistantConnected = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  const assistantConnected = assistantConnectedCheck();
   const assistantModel = process.env.ASSISTANT_MODEL || 'claude-opus-5-5';
   const usd = (n: number, digits = 2) => `$${n.toFixed(digits)}`;
   const caps = readSmsCaps(org?.settings);
@@ -93,7 +94,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
         <p className={assistantConnected ? 'muted' : 'flash error'}>
           {assistantConnected
             ? `The assistant is connected (model ${assistantModel}). Each question is billed by Anthropic by the amount of text read and written.`
-            : 'The assistant is not connected: no Anthropic API key is set, so questions cannot be asked. Area search is unaffected.'}
+            : 'The assistant is not connected: no Anthropic sign-in is set up, so questions cannot be asked. Area search is unaffected.'}
         </p>
         <div className="stats" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
           <div>

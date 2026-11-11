@@ -101,12 +101,13 @@ export const ASSISTANT_TOOLS: AssistantToolDef[] = [
   {
     name: 'notification_summary',
     description:
-      'What was sent to contacts in the last N days (at most 90): counts by channel and status, and the most recent messages with recipient name, hazard and time. Use for "who was told" and "was anyone notified" questions.',
+      'What was sent to contacts in the last N days (at most 90): counts by channel and status, and the most recent messages with recipient name, hazard and time. Use for "who was told" and "was anyone notified" questions. For a question about one property, pass property_id so messages about earlier hazards at that property are included too.',
     input_schema: {
       type: 'object',
       properties: {
         days: { type: 'integer', description: 'How many days back to look, 1 to 90. Default 7.' },
         event_id: { type: 'string', description: 'Only messages about this hazard.' },
+        property_id: { type: 'string', description: 'Only messages that covered this property, whichever hazard they were about.' },
       },
     },
   },

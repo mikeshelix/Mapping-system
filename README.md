@@ -87,7 +87,8 @@ The lookups: `portfolio_summary`, `search_properties`, `active_hazards`, `affect
 Each question is logged in `assistant_usage` (question, who asked, model, requests, lookups, input/output/cached tokens,
 estimated cost, duration). Settings shows this month's count, total, average and most expensive question, and admins can
 download the log as CSV (`/api/export/assistant`). Cost is estimated from the price table in `packages/core/src/assistant.ts`
-(update it when prices change); the Anthropic invoice is the final figure. The default model is `claude-opus-5-5`
+(update it when prices change); the Anthropic invoice is the final figure. On a developer machine the app also accepts a
+sign-in saved by `ant auth login`; servers should set `ANTHROPIC_API_KEY`. The default model is `claude-opus-5-5`
 ($4 per million input tokens, $20 per million output); `ASSISTANT_MODEL` and `ASSISTANT_EFFORT` change the model and how
 much it deliberates.
 
@@ -264,7 +265,8 @@ Twilio is a paid, usage-based service and US numbers must be registered (A2P 10D
   (hail-free) MRMS file, not by live matches.
 - Exposure percentages are planning assumptions set by an admin; they are not derived from loss data.
 - NWS alerts are drawn on the map only where they touch your properties; other sources are drawn nationwide.
-- The assistant has not been run against the live Anthropic API (no key in the build environment). Its request loop is
-  tested with a scripted stand-in for the model and its lookups against a real database; answer quality and real
-  per-question cost are unmeasured until a key is added.
+- The assistant was run live on four questions against a seven-property test portfolio: answers matched the database,
+  the map moved, and a request to delete, email and read other organizations was declined. Cost was $0.025 to $0.042
+  per question on `claude-opus-5-5`. It has not been measured on a portfolio of thousands of properties, where
+  lookups return more text and cost more.
 - The public Overpass server took 30 to 35 seconds per search and refused some requests while this was built.

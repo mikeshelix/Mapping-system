@@ -253,9 +253,11 @@ async function hazardHistory(tx: Tx, org: string, input: Record<string, unknown>
 async function notificationSummary(tx: Tx, org: string, input: Record<string, unknown>): Promise<ToolOutcome> {
   const days = cleanInt(input.days, 1, 90, 7);
   const eventId = cleanUuid(input.event_id);
+  const propertyId = cleanUuid(input.property_id);
   const where = tx`
     n.organization_id = ${org} AND n.kind = 'hazard' AND n.created_at >= now() - make_interval(days => ${days})
-    ${eventId ? tx`AND n.hazard_event_id = ${eventId}` : tx``}`;
+    ${eventId ? tx`AND n.hazard_event_id = ${eventId}` : tx``}
+    ${propertyId ? tx`AND EXISTS (SELECT 1 FROM notification_properties np WHERE np.notification_id = n.id AND np.property_id = ${propertyId})` : tx``}`;
   const [counts, recent] = await Promise.all([
     tx`SELECT n.channel, n.status, count(*)::int AS messages, count(DISTINCT n.contact_id)::int AS contacts FROM notifications n WHERE ${where} GROUP BY 1, 2 ORDER BY 1, 2`,
     // Contact names only: addresses and phone numbers are never given to the model.

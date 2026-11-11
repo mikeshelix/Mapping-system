@@ -3,6 +3,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { ASSISTANT_QUESTION_MAX, ZERO_USAGE, readAssistantCap } from '@hazard/core';
 import { assistantUsageThisMonth, getSql, recordAssistantUsage, runAssistantTool } from '@hazard/db';
 import { getUser } from '@/lib/auth';
+import { assistantConnected as assistantConnectedCheck } from '@/lib/assistantAuth';
 import { DEFAULT_ASSISTANT_MODEL, askAssistant, type Effort, type HistoryTurn } from '@/lib/assistant';
 
 export const dynamic = 'force-dynamic';
@@ -10,7 +11,7 @@ export const maxDuration = 120;
 
 const model = () => process.env.ASSISTANT_MODEL || DEFAULT_ASSISTANT_MODEL;
 const effort = (): Effort => (['low', 'medium', 'high'].includes(process.env.ASSISTANT_EFFORT ?? '') ? (process.env.ASSISTANT_EFFORT as Effort) : 'medium');
-const connected = () => !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+const connected = assistantConnectedCheck;
 /** Hard ceiling on assistant spend across all organizations in a calendar month, in US dollars. */
 function platformBudgetUsd(): number {
   const v = Number(process.env.ASSISTANT_MONTHLY_BUDGET_USD);
