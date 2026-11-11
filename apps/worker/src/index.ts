@@ -1,9 +1,11 @@
 // Worker process: polls hazard feeds, matches properties, queues and sends notifications.
 // Each job runs in its own loop, so a failing or slow feed never blocks the others.
 import '@hazard/db/src/env';
+import type { Channel } from '@hazard/core';
 import { evaluatePendingEvents, getSql } from '@hazard/db';
 import { fetchMissingZones, NWS_FEED, pollNwsAlerts } from './nws';
-import { createEmailProvider } from './providers';
+import { FEEDS, runFeed } from './feeds';
+import { createEmailProvider, createSmsProvider } from './providers';
 import { alertOnStaleFeeds, sendQueued } from './sender';
 import { backoffMs, errorMessage, log, sleep } from './util';
 
@@ -15,6 +17,10 @@ interface Job {
 
 const sql = getSql();
 const email = createEmailProvider();
+const sms = createSmsProvider();
+// Text messages are only planned when a provider is configured to send them.
+const enabledChannels: Channel[] = sms ? ['email', 'sms'] : ['email'];
+const feeds = FEEDS.filter((f) => !f.available || f.available());
 const appBaseUrl = process.env.APP_BASE_URL || 'http://localhost:3000';
 // NWS asks for no more than one request every 30 seconds.
 const nwsPollSeconds = Math.max(30, Number(process.env.NWS_POLL_SECONDS) || 60);
@@ -23,8 +29,9 @@ const nwsStaleSeconds = Number(process.env.NWS_STALE_AFTER_SECONDS) || 600;
 const jobs: Job[] = [
   { name: 'nws-alerts', intervalMs: nwsPollSeconds * 1000, run: () => pollNwsAlerts(sql) },
   { name: 'nws-zones', intervalMs: 15_000, run: () => fetchMissingZones(sql) },
-  { name: 'evaluate', intervalMs: 10_000, run: () => evaluatePendingEvents(sql, { appBaseUrl }) },
-  { name: 'send', intervalMs: 10_000, run: () => sendQueued(sql, email) },
+  ...feeds.map((f) => ({ name: f.feed, intervalMs: f.pollSeconds * 1000, run: () => runFeed(sql, f) })),
+  { name: 'evaluate', intervalMs: 10_000, run: () => evaluatePendingEvents(sql, { appBaseUrl, enabledChannels }) },
+  { name: 'send', intervalMs: 10_000, run: () => sendQueued(sql, email, sms) },
   { name: 'feed-health', intervalMs: 60_000, run: () => alertOnStaleFeeds(sql) },
 ];
 
@@ -51,7 +58,22 @@ await sql`
   INSERT INTO feed_status (feed, stale_after_seconds) VALUES (${NWS_FEED}, ${nwsStaleSeconds})
   ON CONFLICT (feed) DO UPDATE SET stale_after_seconds = EXCLUDED.stale_after_seconds`;
 
-log('info', 'worker started', { jobs: jobs.map((j) => j.name), emailProvider: email.name, nwsPollSeconds });
+for (const f of feeds) {
+  await sql`
+    INSERT INTO feed_status (feed, stale_after_seconds) VALUES (${f.feed}, ${f.staleAfterSeconds})
+    ON CONFLICT (feed) DO UPDATE SET stale_after_seconds = EXCLUDED.stale_after_seconds`;
+}
+// A feed that cannot run here (no key) should not sit in the health list looking stale.
+const skipped = FEEDS.filter((f) => !feeds.includes(f)).map((f) => f.feed);
+if (skipped.length) await sql`DELETE FROM feed_status WHERE feed = ANY(${skipped}::text[])`;
+
+log('info', 'worker started', {
+  jobs: jobs.map((j) => j.name),
+  emailProvider: email.name,
+  smsProvider: sms?.name ?? 'none',
+  feedsSkipped: skipped,
+  nwsPollSeconds,
+});
 const loops = jobs.map(runLoop);
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

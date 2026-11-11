@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { geocodeOneLine } from '@hazard/core';
+import { geocodeOneLine, normalizeUsPhone } from '@hazard/core';
 import { flagActiveEvents, getSql } from '@hazard/db';
 import { requireUser } from '@/lib/auth';
 import { back, isUuid, list, money, optional, str } from '@/lib/form';
@@ -102,7 +102,9 @@ export async function createContact(form: FormData): Promise<void> {
   const user = await requireUser();
   const name = str(form, 'name');
   const email = optional(form, 'email');
-  const mobile = optional(form, 'mobile');
+  const mobileInput = optional(form, 'mobile');
+  const mobile = mobileInput ? normalizeUsPhone(mobileInput) : null;
+  if (mobileInput && !mobile) back('/contacts', 'error', 'Enter the mobile number as a 10-digit US number.');
   const clientId = optional(form, 'client_id');
   const smsOptIn = form.get('sms_opt_in') === 'on' && !!mobile;
   if (!name) back('/contacts', 'error', 'Contact name is required.');

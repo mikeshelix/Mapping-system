@@ -3,6 +3,8 @@ import {
   isMarineZone,
   planNotifications,
   renderHazardEmail,
+  renderHazardSms,
+  SOURCE_NAMES,
   notifiedKey,
   type Channel,
   type ContactInput,
@@ -11,12 +13,10 @@ import {
   type NormalizedAlert,
   type RuleInput,
   type Severity,
+  type SourceId,
 } from '@hazard/core';
 import type { Sql, Tx } from './client';
-
-const SOURCE_NAMES: Record<string, string> = {
-  nws: 'National Weather Service',
-};
+import { readSmsCaps } from './sources';
 
 // ------------------------------------------------------------------ ingest
 
@@ -204,7 +204,7 @@ async function loadRules(sql: Sql, orgIds: string[]): Promise<RuleInput[]> {
 
 async function loadContacts(sql: Sql, orgIds: string[]): Promise<ContactInput[]> {
   const rows = await sql`
-    SELECT c.id, c.organization_id, c.client_id, c.email, c.mobile, c.sms_opt_in,
+    SELECT c.id, c.organization_id, c.client_id, c.email, c.mobile, c.sms_opt_in, c.sms_opt_out_at,
       COALESCE((SELECT array_agg(property_id::text) FROM contact_properties WHERE contact_id = c.id), '{}') AS property_ids
     FROM contacts c WHERE c.organization_id = ANY(${orgIds}::uuid[])`;
   return rows.map((r) => ({
@@ -214,7 +214,7 @@ async function loadContacts(sql: Sql, orgIds: string[]): Promise<ContactInput[]>
     propertyIds: r.property_ids,
     email: r.email,
     mobile: r.mobile,
-    smsOptIn: r.sms_opt_in && !!r.mobile,
+    smsOptIn: r.sms_opt_in && !r.sms_opt_out_at && !!r.mobile,
   }));
 }
 
@@ -268,6 +268,23 @@ export async function queueNotificationsForEvent(
   const contactInfo = new Map(contactRows.map((c) => [c.id as string, c]));
   const mapUrl = `${opts.appBaseUrl.replace(/\/$/, '')}/?event=${eventId}`;
 
+  // SMS send caps, per organization: at most N texts per event and N per day.
+  const smsOrgs = [...new Set(plans.filter((p) => p.channel === 'sms').map((p) => p.organizationId))];
+  const smsBudget = new Map<string, { perEvent: number; perDay: number }>();
+  if (smsOrgs.length) {
+    const rows = await sql`
+      SELECT o.id, o.settings,
+        (SELECT count(*)::int FROM notifications n WHERE n.organization_id = o.id AND n.channel = 'sms'
+          AND n.status <> 'skipped' AND n.hazard_event_id = ${eventId}) AS for_event,
+        (SELECT count(*)::int FROM notifications n WHERE n.organization_id = o.id AND n.channel = 'sms'
+          AND n.status <> 'skipped' AND n.created_at >= date_trunc('day', now())) AS today
+      FROM organizations o WHERE o.id = ANY(${smsOrgs}::uuid[])`;
+    for (const r of rows) {
+      const caps = readSmsCaps(r.settings);
+      smsBudget.set(r.id, { perEvent: caps.perEvent - r.for_event, perDay: caps.perDay - r.today });
+    }
+  }
+
   let queued = 0;
   for (const plan of plans) {
     const contact = contactInfo.get(plan.contactId);
@@ -278,13 +295,14 @@ export async function queueNotificationsForEvent(
       .map((id) => propertyInfo.get(id))
       .filter((p): p is NonNullable<typeof p> => !!p)
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-    const message = renderHazardEmail({
+    const sourceName = SOURCE_NAMES[event.source as SourceId] ?? event.source;
+    const emailMessage = renderHazardEmail({
       eventName: event.event_name,
       severity: plan.severity,
       headline: event.headline,
       instruction: event.instruction,
       areaDesc: event.area_desc,
-      sourceName: SOURCE_NAMES[event.source] ?? event.source,
+      sourceName,
       sourceUrl: event.source_url,
       endsAt: event.ends_at ? new Date(event.ends_at).toISOString() : null,
       isEscalation: plan.isEscalation,
@@ -296,13 +314,37 @@ export async function queueNotificationsForEvent(
       })),
       mapUrl,
     });
+    let message: { subject: string | null; html: string | null; text: string } = emailMessage;
+    let skipReason: string | null = null;
+    if (plan.channel === 'sms') {
+      message = {
+        subject: null,
+        html: null,
+        text: renderHazardSms({
+          eventName: event.event_name,
+          severity: plan.severity,
+          sourceName,
+          isEscalation: plan.isEscalation,
+          properties: properties.map((p) => ({ name: p.name, address: null, clientName: p.client_name })),
+          mapUrl,
+        }),
+      };
+      const budget = smsBudget.get(plan.organizationId);
+      if (budget && budget.perEvent <= 0) skipReason = 'Not sent: the per-event text message cap was reached.';
+      else if (budget && budget.perDay <= 0) skipReason = 'Not sent: the daily text message cap was reached.';
+      else if (budget) {
+        budget.perEvent--;
+        budget.perDay--;
+      }
+    }
 
     const inserted = await sql.begin(async (tx) => {
       const [n] = await tx`
         INSERT INTO notifications (organization_id, contact_id, hazard_event_id, rule_id, channel, severity,
-          is_escalation, recipient, subject, body_html, body_text)
+          is_escalation, recipient, subject, body_html, body_text, status, error)
         VALUES (${plan.organizationId}, ${plan.contactId}, ${eventId}, ${plan.ruleId}, ${plan.channel},
-          ${plan.severity}::severity, ${plan.isEscalation}, ${recipient}, ${message.subject}, ${message.html}, ${message.text})
+          ${plan.severity}::severity, ${plan.isEscalation}, ${recipient}, ${message.subject}, ${message.html}, ${message.text},
+          ${skipReason ? 'skipped' : 'queued'}, ${skipReason})
         RETURNING id`;
       const rows = properties.map((p) => ({
         notification_id: n!.id as string,
@@ -322,7 +364,7 @@ export async function queueNotificationsForEvent(
       }
       return true;
     });
-    if (inserted) queued++;
+    if (inserted && !skipReason) queued++;
   }
   return queued;
 }

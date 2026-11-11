@@ -17,7 +17,8 @@
     "next": "^16.4.6",
     "papaparse": "^5.7.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "twilio": "^6.3.0"
   },
   "devDependencies": {
     "@types/geojson": "^7946.0.16",

@@ -98,3 +98,43 @@ ${rows}
 
   return { subject, html, text: textLines.join('\n') };
 }
+
+/**
+ * Text-message version: short, but still states hazard, severity, properties, source,
+ * map link, the disclaimer and how to opt out.
+ */
+export function renderHazardSms(m: Pick<MessageInput, 'eventName' | 'severity' | 'sourceName' | 'isEscalation' | 'properties' | 'mapUrl'>): string {
+  const count = m.properties.length;
+  const names = m.properties.slice(0, 2).map((p) => p.name).join(', ');
+  const more = count > 2 ? ` +${count - 2} more` : '';
+  return (
+    `${m.isEscalation ? 'UPGRADED: ' : ''}${m.eventName} (${SEVERITY_LABELS[m.severity]}) affects ` +
+    `${count} propert${count === 1 ? 'y' : 'ies'}: ${names}${more}. Source: ${m.sourceName}. Map: ${m.mapUrl} ` +
+    `Supplements, does not replace, official warnings. Reply STOP to opt out.`
+  );
+}
+
+/**
+ * Normalize a US phone number to E.164 (+1XXXXXXXXXX). Returns null if it is not
+ * a plausible 10-digit US number.
+ */
+export function normalizeUsPhone(input: string): string | null {
+  const digits = input.replace(/\D/g, '');
+  const ten = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
+  if (ten.length !== 10 || !/^[2-9]\d{2}[2-9]\d{6}$/.test(ten)) return null;
+  return `+1${ten}`;
+}
+
+/** Twilio's default opt-out and opt-in keywords (case-insensitive, whole message). */
+const STOP_WORDS = new Set(['stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit', 'revoke', 'optout']);
+const START_WORDS = new Set(['start', 'unstop', 'yes']);
+
+export function classifyInboundSms(body: string, optOutType?: string | null): 'stop' | 'start' | 'help' | 'other' {
+  const flagged = (optOutType ?? '').trim().toLowerCase();
+  if (flagged === 'stop' || flagged === 'start' || flagged === 'help') return flagged;
+  const word = body.trim().toLowerCase();
+  if (STOP_WORDS.has(word)) return 'stop';
+  if (START_WORDS.has(word)) return 'start';
+  if (word === 'help' || word === 'info') return 'help';
+  return 'other';
+}

@@ -5,7 +5,8 @@ Answers one question: **which of our clients' properties are affected right now,
 Staff plot client properties on a map. A worker watches free US government hazard feeds, matches each hazard
 against the properties with PostGIS, and emails the right contacts.
 
-Status: **Phase 1 (core alerting)** is built. Phases 2 to 4 are not started.
+Status: **Phase 1 (core alerting)** and **Phase 2 (more hazards, map layers, impact list, SMS)** are built.
+Phases 3 and 4 are not started.
 
 ## What is in Phase 1
 
@@ -18,6 +19,15 @@ Status: **Phase 1 (core alerting)** is built. Phases 2 to 4 are not started.
 - Spatial matching, alert rules, grouped email notifications through Brevo
 - Feed health tracking, a warning banner when a feed is stale, and an email to platform admins
 - Tests for severity mapping, spatial matching, deduplication and rule evaluation
+
+## What is in Phase 2
+
+- Eight more hazard feeds (table below), each normalized to the common severity scale
+- Toggleable map layers per hazard source, plus live radar
+- Impacts screen: every affected property ranked worst first, with severity and client filters
+- Text messages through Twilio: only to contacts with a recorded opt-in, STOP replies honoured,
+  and per-event and per-day send caps an admin can change
+- Settings screen: text message caps, and (for platform admins) feed switches and matching distances
 
 ## Layout
 
@@ -47,10 +57,31 @@ With `BREVO_API_KEY` empty, emails are written to the worker log instead of bein
 
 ## Hazard sources
 
-| Source | Status | Poll | Notes |
-|---|---|---|---|
-| NWS alerts (`api.weather.gov/alerts/active`) | Phase 1, live | 60 s | Requires a `User-Agent`. NWS asks for no more than one request per 30 s. |
-| SPC storm reports, MRMS hail, NHC, NIFC/WFIGS, NASA FIRMS, USGS, OpenFEMA | Phase 2 | | Not started |
+All free. Endpoints, formats and field names were checked against the live services on 2026-11-10.
+
+| Feed | Source | Poll | What becomes an event | Area used for matching |
+|---|---|---|---|---|
+| `nws` | NWS alerts, `api.weather.gov/alerts/active` | 60 s | Each alert | Alert polygon, else its zones / counties |
+| `spc` | SPC storm reports, `spc.noaa.gov/climo/reports/today_{torn,hail,wind}.csv` | 10 min | Each report | Point + 5 mi (configurable) |
+| `mesh` | MRMS radar hail, `mrms.ncep.noaa.gov/2D/MESH_Max_60min/` | 10 min | Hail swath per day, 1-degree tile and size band | 0.01-degree grid cells with hail of 0.75 in or more |
+| `nhc` | NHC `CurrentStorms.json` + NOAA tropical map service | 15 min | Forecast cone; each wind field band | Polygons (bands do not overlap) |
+| `wfigs` | NIFC WFIGS current perimeters (ArcGIS) | 30 min | Each wildfire (prescribed burns excluded) | Perimeter + 2 mi (configurable) |
+| `firms` | NASA FIRMS area API, VIIRS NOAA-20 and NOAA-21 | 15 min | Each detection | Point + 1.25 mi (configurable) |
+| `nwps` | NOAA river gauges map service | 15 min | Each gauge at action stage or in flood | Point + 2 mi (configurable) |
+| `usgs` | USGS earthquakes, `2.5_day.geojson` | 5 min | Each earthquake | Epicenter + radius by magnitude |
+| `fema` | OpenFEMA `DisasterDeclarationsSummaries` | 6 h | Each declaration in the last 30 days | Designated counties |
+
+Notes:
+
+- **Flood stages.** The brief named USGS for stream-gauge flood stages. USGS publishes gauge readings but not
+  flood categories; NOAA's National Water Prediction Service publishes both, so that is the source used.
+- **FIRMS** needs a free key (`FIRMS_MAP_KEY`). Without it the feed is skipped and does not appear in feed health.
+  The Suomi-NPP satellite stopped delivering on 2026-11-02, so NOAA-20 and NOAA-21 are used.
+- **MRMS** files are GRIB2 with PNG packing. They are decoded in `apps/worker/src/feeds/mesh.ts` with no native
+  library. Hail is a radar estimate, not a ground report.
+- **Radar** on the map is NOAA's MRMS reflectivity mosaic (WMS at `opengeo.ncep.noaa.gov`).
+- **Storm cell projections.** NWS storm-based warnings already carry the projected path as their polygon, which
+  is what gets matched. Separate storm-track vectors are not ingested.
 
 ### How NWS areas are matched
 
@@ -67,17 +98,33 @@ notification. Marine zones are never fetched, since no property can be in one.
 ## Severity scale
 
 Every source is normalized to `minor`, `moderate`, `severe`, `extreme`, plus `unknown`.
-
-| Source | Native value | Common scale |
-|---|---|---|
-| NWS | Extreme | extreme |
-| NWS | Severe | severe |
-| NWS | Moderate | moderate |
-| NWS | Minor | minor |
-| NWS | Unknown, missing or unrecognized | unknown |
-
 `unknown` events are stored and shown but **never** trigger a notification, whatever the rule says.
-The mapping lives in `packages/core/src/severity.ts`; each new source adds its own function and a row here.
+The mappings live in `packages/core/src/severity.ts` (NWS) and `packages/core/src/sources.ts` (all others),
+each with tests. Change the code and this table together.
+
+| Source | Native value | minor | moderate | severe | extreme |
+|---|---|---|---|---|---|
+| NWS alerts | CAP severity | Minor | Moderate | Severe | Extreme |
+| SPC hail report, MRMS hail | Hail size | under 1.00 in | 1.00 to 1.74 in | 1.75 to 2.74 in | 2.75 in and larger |
+| SPC wind report | Gust | under 58 mph | 58 to 74 mph, or damage with no measured speed | 75 to 99 mph | 100 mph and over |
+| SPC tornado report | EF rating | | | Unrated, EF0, EF1 | EF2 and stronger |
+| NHC forecast cone | Max sustained wind | under 34 kt (depression) | 34 to 63 kt (tropical storm) | 64 to 95 kt (hurricane) | 96 kt and over (major hurricane) |
+| NHC wind field | Wind radius | | 34 kt | 50 kt | 64 kt |
+| WFIGS wildfire | Size, then containment | 90%+ contained | under 100 acres | 100 to 4,999 acres | 5,000 acres and over |
+| NASA FIRMS | VIIRS confidence | low | nominal | high | never |
+| NOAA river gauge | Flood category | action stage | minor flooding | moderate flooding | major flooding |
+| USGS earthquake | Magnitude | under 4.0 | 4.0 to 4.9 | 5.0 to 5.9 | 6.0 and over |
+| FEMA declaration | Type | | EM, FM | DR | never |
+
+Further rules:
+
+- NWS "Unknown", and any missing or unrecognized value from any source, maps to `unknown`.
+- MRMS hail under 0.75 in is ignored as too noisy.
+- Wildfire 50 to 89% contained is rated one level lower than its size alone.
+- A USGS PAGER alert raises an earthquake: yellow to at least severe, orange or red to extreme.
+- River gauges are shifted up one step from NOAA's own names, because any flooding at a gauge is significant.
+- Earthquake radius: under M4 15 km, M4 40 km, M5 100 km, M6 200 km, M7+ 300 km. This is a simplification;
+  real shaking depends on depth and ground.
 
 ## Alert engine rules
 
@@ -92,8 +139,29 @@ The mapping lives in `packages/core/src/severity.ts`; each new source adds its o
 - **Grouping.** One message per contact per event, listing all of that contact's affected properties.
 - **Re-evaluation.** Adding properties, contacts or rules flags current events so they are re-checked; a new rule
   applies to hazards already in effect.
+- **Sources without message chains** (everything except NWS) are stored by their own stable ID. A repeat poll
+  that changes nothing is ignored; a real change updates the event and keeps a version. River gauges have no
+  event ID, so each separate flood at a gauge becomes its own event.
+- **Ending.** Sources that list what is in effect (fires, storms, gauges) expire an event when it is no longer
+  listed. Moment-in-time sources (reports, detections, earthquakes) expire after 24 hours; hail swaths 12 hours
+  after hail was last seen; FEMA declarations after 30 days.
 - **Every message** states the hazard, severity, affected properties, issuing source, a map link, and the
   disclaimer that alerts supplement official warnings and do not replace them.
+
+## Text messages
+
+Off until Twilio is configured (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and a number or Messaging Service).
+Twilio is a paid, usage-based service and US numbers must be registered (A2P 10DLC) before sending.
+
+- A rule sends texts only if it is explicitly set to; email is always the default.
+- Texts go only to contacts with a recorded opt-in. Consent is checked when the message is queued and again
+  when it is sent.
+- **STOP.** Point the Twilio number's inbound webhook at `TWILIO_WEBHOOK_URL` (`/api/sms/inbound`). Each request
+  is verified with Twilio's signature. STOP (and UNSUBSCRIBE, CANCEL, END, QUIT, STOPALL, REVOKE, OPTOUT) records
+  the opt-out and drops anything still queued for that number; START opts back in. Every inbound text is logged
+  in `sms_events`. Twilio also blocks sends to opted-out numbers on its side.
+- **Caps.** Each organization has a per-event and a per-day cap (defaults 50 and 200, changed in Settings).
+  A text over the cap is recorded as `skipped` with the reason and is not retried.
 
 ## Reliability
 
@@ -119,4 +187,9 @@ The mapping lives in `packages/core/src/severity.ts`; each new source adds its o
 - Geocoding runs inside the request; a 10,000-row file can take several minutes.
 - The Census geocoder places addresses by interpolating along the street, so points can be off by a building or two.
 - USGS imagery is published to zoom 16 and is stretched beyond that.
-- SMS opt-in is recorded, but no text messages are sent until Phase 2.
+- Real sends through Brevo and Twilio, and the Twilio inbound webhook, have not been exercised against the live
+  services (no credentials in the build environment).
+- The FIRMS feed is written to the documented API but has not run against live data (no key).
+- No hail or storm-report rows were live when this was built, so those parsers are verified by tests and by a real
+  (hail-free) MRMS file, not by live matches.
+- NWS alerts are drawn on the map only where they touch your properties; other sources are drawn nationwide.

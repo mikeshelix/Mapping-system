@@ -4,3 +4,4 @@ export * from './dedup';
 export * from './rules';
 export * from './message';
 export * from './census';
+export * from './sources';

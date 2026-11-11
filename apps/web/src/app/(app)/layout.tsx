@@ -23,6 +23,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       <nav className="topbar">
         <span className="brand">Hazard Alerts</span>
         <Link href="/">Map</Link>
+        <Link href="/impacts">Impacts</Link>
         <Link href="/clients">Clients</Link>
         <Link href="/properties">Properties</Link>
         <Link href="/contacts">Contacts</Link>
@@ -31,6 +32,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         <Link href="/notifications">Notifications</Link>
         <Link href="/feeds">Feeds</Link>
         {user.role === 'admin' && <Link href="/users">Users</Link>}
+        {user.role === 'admin' && <Link href="/settings">Settings</Link>}
         <span className="spacer" />
         <span className="who">
           {user.name} · {user.organizationName}

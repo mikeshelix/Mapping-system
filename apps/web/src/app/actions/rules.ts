@@ -15,6 +15,8 @@ export async function createRule(form: FormData): Promise<void> {
   const recipientMode = str(form, 'recipient_mode') === 'specific' ? 'specific' : 'linked';
   const clientIds = list(form, 'client_id').filter(isUuid);
   const contactIds = list(form, 'contact_id').filter(isUuid);
+  // Email is the default channel; SMS only when the rule explicitly asks for it.
+  const channels = ['email', ...(form.get('channel_sms') === 'on' ? ['sms'] : [])];
 
   if (!name) back('/rules', 'error', 'Rule name is required.');
   if (!(NOTIFIABLE_SEVERITIES as readonly string[]).includes(minSeverity)) back('/rules', 'error', 'Choose a minimum severity.');
@@ -25,7 +27,7 @@ export async function createRule(form: FormData): Promise<void> {
   await sql.begin(async (tx) => {
     const [rule] = await tx`
       INSERT INTO alert_rules (organization_id, name, hazard_types, min_severity, scope, recipient_mode, channels)
-      VALUES (${user.organizationId}, ${name}, ${hazardTypes}::text[], ${minSeverity}::severity, ${scope}, ${recipientMode}, '{email}')
+      VALUES (${user.organizationId}, ${name}, ${hazardTypes}::text[], ${minSeverity}::severity, ${scope}, ${recipientMode}, ${channels}::text[])
       RETURNING id`;
     const ruleId = rule!.id as string;
     // Selecting through the organization's own rows keeps another tenant's IDs out.
