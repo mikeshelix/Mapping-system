@@ -9,9 +9,11 @@ export interface RuleInput {
   /** Empty means every hazard type. */
   hazardTypes: string[];
   minSeverity: Severity;
-  scope: 'all' | 'clients' | 'properties';
+  scope: 'all' | 'clients' | 'properties' | 'zips';
   clientIds: string[];
   propertyIds: string[];
+  /** Five-digit ZIP codes, for scope 'zips'. */
+  zipCodes?: string[];
   recipientMode: 'linked' | 'specific';
   contactIds: string[];
   channels: Channel[];
@@ -21,6 +23,8 @@ export interface ImpactInput {
   propertyId: string;
   clientId: string;
   organizationId: string;
+  /** The property's ZIP code, needed only for rules scoped by ZIP. */
+  zip?: string | null;
 }
 
 export interface ContactInput {
@@ -61,6 +65,7 @@ export function ruleCoversImpact(rule: RuleInput, impact: ImpactInput): boolean 
   if (rule.organizationId !== impact.organizationId) return false;
   if (rule.scope === 'clients') return rule.clientIds.includes(impact.clientId);
   if (rule.scope === 'properties') return rule.propertyIds.includes(impact.propertyId);
+  if (rule.scope === 'zips') return !!impact.zip && (rule.zipCodes ?? []).includes(impact.zip.trim().slice(0, 5));
   return true;
 }
 

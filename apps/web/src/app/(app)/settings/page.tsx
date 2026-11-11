@@ -1,8 +1,8 @@
-import { SOURCE_NAMES, type SourceId } from '@hazard/core';
+import { EXPOSURE_NOTE, NOTIFIABLE_SEVERITIES, readExposureFactors, SEVERITY_LABELS, SOURCE_NAMES, type SourceId } from '@hazard/core';
 import { getSql, readSmsCaps } from '@hazard/db';
 import { requireAdmin } from '@/lib/auth';
 import { Flash, type Search } from '@/components/Flash';
-import { saveFeedSetting, saveSmsCaps } from '@/app/actions/settings';
+import { saveExposureFactors, saveFeedSetting, saveSmsCaps } from '@/app/actions/settings';
 
 const BUFFER_HELP: Partial<Record<SourceId, string>> = {
   spc: 'around each storm report',
@@ -23,6 +23,7 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
       WHERE organization_id = ${admin.organizationId} AND channel = 'sms' AND created_at >= date_trunc('day', now())`,
   ]);
   const caps = readSmsCaps(org?.settings);
+  const factors = readExposureFactors(org?.settings);
   const smsConnected = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && (process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_MESSAGING_SERVICE_SID));
 
   return (
@@ -52,6 +53,23 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
           a cap is listed under Notifications as skipped and is not retried; the contact still gets the email. Texts
           only ever go to contacts who have agreed to receive them, and a reply of STOP ends them.
         </p>
+      </div>
+
+      <div className="card">
+        <h2>Estimated exposure</h2>
+        <p className="muted">
+          Percentage of a property&apos;s declared value counted as exposed, by the severity of the hazard affecting it.
+        </p>
+        <form action={saveExposureFactors} className="grid">
+          {NOTIFIABLE_SEVERITIES.map((s) => (
+            <label key={s}>
+              {SEVERITY_LABELS[s]} (%)
+              <input type="number" name={`factor_${s}`} min={0} max={100} step="0.1" defaultValue={Math.round(factors[s] * 1000) / 10} required />
+            </label>
+          ))}
+          <button type="submit">Save percentages</button>
+        </form>
+        <p className="small muted">{EXPOSURE_NOTE}</p>
       </div>
 
       <div className="card">
