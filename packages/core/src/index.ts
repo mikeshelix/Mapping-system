@@ -6,3 +6,5 @@ export * from './message';
 export * from './census';
 export * from './sources';
 export * from './reporting';
+export * from './assistant';
+export * from './places';

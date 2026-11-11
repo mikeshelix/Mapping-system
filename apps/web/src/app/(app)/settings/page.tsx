@@ -1,8 +1,19 @@
-import { EXPOSURE_NOTE, NOTIFIABLE_SEVERITIES, readExposureFactors, SEVERITY_LABELS, SOURCE_NAMES, type SourceId } from '@hazard/core';
-import { getSql, readSmsCaps } from '@hazard/db';
+import {
+  EXPOSURE_NOTE,
+  MODEL_PRICES,
+  NOTIFIABLE_SEVERITIES,
+  PLACES_NOTE,
+  readAreaSearchCap,
+  readAssistantCap,
+  readExposureFactors,
+  SEVERITY_LABELS,
+  SOURCE_NAMES,
+  type SourceId,
+} from '@hazard/core';
+import { areaSearchesToday, assistantUsageThisMonth, getSql, readSmsCaps } from '@hazard/db';
 import { requireAdmin } from '@/lib/auth';
 import { Flash, type Search } from '@/components/Flash';
-import { saveExposureFactors, saveFeedSetting, saveSmsCaps } from '@/app/actions/settings';
+import { saveExposureFactors, saveFeedSetting, saveSmsCaps, saveUsageLimits } from '@/app/actions/settings';
 
 const BUFFER_HELP: Partial<Record<SourceId, string>> = {
   spc: 'around each storm report',
@@ -14,14 +25,19 @@ const BUFFER_HELP: Partial<Record<SourceId, string>> = {
 export default async function SettingsPage({ searchParams }: { searchParams: Search }) {
   const admin = await requireAdmin();
   const sql = getSql();
-  const [[org], feeds, [usage]] = await Promise.all([
+  const [[org], feeds, [usage], ai, areaToday] = await Promise.all([
     sql`SELECT settings FROM organizations WHERE id = ${admin.organizationId}`,
     sql`SELECT feed, enabled, buffer_meters FROM feed_settings ORDER BY feed`,
     sql`
       SELECT count(*) FILTER (WHERE status <> 'skipped')::int AS sent_today, count(*) FILTER (WHERE status = 'skipped')::int AS held_today
       FROM notifications
       WHERE organization_id = ${admin.organizationId} AND channel = 'sms' AND created_at >= date_trunc('day', now())`,
+    assistantUsageThisMonth(sql, admin.organizationId),
+    areaSearchesToday(sql, admin.organizationId),
   ]);
+  const assistantConnected = !!(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+  const assistantModel = process.env.ASSISTANT_MODEL || 'claude-opus-5-5';
+  const usd = (n: number, digits = 2) => `$${n.toFixed(digits)}`;
   const caps = readSmsCaps(org?.settings);
   const factors = readExposureFactors(org?.settings);
   const smsConnected = !!(process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && (process.env.TWILIO_FROM_NUMBER || process.env.TWILIO_MESSAGING_SERVICE_SID));
@@ -70,6 +86,47 @@ export default async function SettingsPage({ searchParams }: { searchParams: Sea
           <button type="submit">Save percentages</button>
         </form>
         <p className="small muted">{EXPOSURE_NOTE}</p>
+      </div>
+
+      <div className="card">
+        <h2>Assistant and area search</h2>
+        <p className={assistantConnected ? 'muted' : 'flash error'}>
+          {assistantConnected
+            ? `The assistant is connected (model ${assistantModel}). Each question is billed by Anthropic by the amount of text read and written.`
+            : 'The assistant is not connected: no Anthropic API key is set, so questions cannot be asked. Area search is unaffected.'}
+        </p>
+        <div className="stats" style={{ marginBottom: 12, flexWrap: 'wrap' }}>
+          <div>
+            <strong>{ai.questions.toLocaleString()}</strong>questions this month
+          </div>
+          <div>
+            <strong>{usd(ai.costUsd)}</strong>estimated cost this month
+          </div>
+          <div>
+            <strong>{ai.averageCostUsd === null ? 'n/a' : usd(ai.averageCostUsd, 4)}</strong>average per answered question
+          </div>
+          <div>
+            <strong>{ai.highestCostUsd === null ? 'n/a' : usd(ai.highestCostUsd, 4)}</strong>most expensive question
+          </div>
+        </div>
+        <form action={saveUsageLimits} className="grid">
+          <label>
+            Most assistant questions in one month
+            <input type="number" name="assistant_monthly" min={0} max={100000} defaultValue={readAssistantCap(org?.settings)} required />
+          </label>
+          <label>
+            Most area searches in one day
+            <input type="number" name="area_daily" min={0} max={5000} defaultValue={readAreaSearchCap(org?.settings)} required />
+          </label>
+          <button type="submit">Save limits</button>
+        </form>
+        <p className="small muted">
+          {MODEL_PRICES[assistantModel]
+            ? 'Costs are estimated from the published price list and the text counts Anthropic reports for each question; your invoice is the final figure.'
+            : 'The price of this model is not in the price table, so cost cannot be estimated; text counts are still recorded.'}{' '}
+          Months run on UTC. {areaToday.toLocaleString()} area search{areaToday === 1 ? '' : 'es'} today. Area search is free. {PLACES_NOTE}{' '}
+          <a href="/api/export/assistant">Download assistant usage (CSV)</a>
+        </p>
       </div>
 
       <div className="card">

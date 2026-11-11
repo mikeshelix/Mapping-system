@@ -23,6 +23,7 @@ const EXPOSURE_HEADER = 'Estimated exposure USD (estimate only, not a damage ass
  *   /api/export/properties            every property
  *   /api/export/impacts               properties affected by active hazards (add ?days=90 for history)
  *   /api/export/exposure              one row per affected property with its estimated exposure
+ *   /api/export/assistant             every assistant question with its cost (admins only; add ?days=, default 90)
  * Optional filters: ?client=<id>, ?severity=<minimum>.
  */
 export async function GET(request: Request, { params }: { params: Promise<{ kind: string }> }) {
@@ -94,6 +95,20 @@ export async function GET(request: Request, { params }: { params: Promise<{ kind
           iso(r.since), r.declared_value, severity === 'unknown' ? 0 : Math.round(factors[severity] * 1000) / 10,
           estimateExposure(r.declared_value, severity, factors)];
       }),
+    );
+  } else if (kind === 'assistant') {
+    if (user.role !== 'admin') return NextResponse.json({ error: 'Admins only' }, { status: 403 });
+    const rows = await sql`
+      SELECT a.created_at, u.name AS asked_by, a.question, a.status, a.model, a.requests, a.tool_calls,
+        a.input_tokens, a.cache_read_tokens, a.cache_write_tokens, a.output_tokens, a.cost_usd, a.duration_ms
+      FROM assistant_usage a LEFT JOIN users u ON u.id = a.user_id
+      WHERE a.organization_id = ${org} AND a.created_at >= now() - make_interval(days => ${days || 90})
+      ORDER BY a.created_at DESC LIMIT 50000`;
+    csv = toCsv(
+      ['Asked at', 'Asked by', 'Question', 'Result', 'Model', 'Requests to the model', 'Lookups', 'Input tokens', 'Cached input tokens read',
+        'Cached input tokens written', 'Output tokens', 'Estimated cost USD', 'Seconds'],
+      rows.map((r) => [iso(r.created_at), r.asked_by, r.question, r.status, r.model, r.requests, r.tool_calls, r.input_tokens, r.cache_read_tokens,
+        r.cache_write_tokens, r.output_tokens, r.cost_usd, Math.round(r.duration_ms / 100) / 10]),
     );
   } else {
     return NextResponse.json({ error: 'Unknown export' }, { status: 404 });

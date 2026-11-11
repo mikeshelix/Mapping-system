@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import maplibregl from 'maplibre-gl';
-import { DISCLAIMER, HAZARD_LABELS, SEVERITY_COLORS, SEVERITY_LABELS, SOURCE_NAMES, type HazardType, type Severity, type SourceId } from '@hazard/core';
+import { DISCLAIMER, HAZARD_LABELS, SEVERITY_COLORS, SEVERITY_LABELS, SOURCE_NAMES, type HazardType, type LonLat, type Place, type Severity, type SourceId } from '@hazard/core';
+import type { MapAction } from '@hazard/db';
+import { AreaSearchPanel } from './AreaSearchPanel';
+import { AssistantPanel } from './AssistantPanel';
 import { BASE_STYLE_URL, addSatelliteLayer, firstLabelLayer, setSatellite } from './basemap';
 
 interface Client {
@@ -99,6 +102,13 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
   const [selected, setSelected] = useState<string | null>(focusEventId);
   const [layersOff, setLayersOff] = useState<Set<SourceId>>(new Set(DEFAULT_OFF));
   const [radar, setRadar] = useState(false);
+  const [tab, setTab] = useState<'alerts' | 'ask' | 'area'>('alerts');
+  // What the assistant asked to be shown, the shape being drawn, and the businesses found in it.
+  const [action, setAction] = useState<MapAction | null>(null);
+  const [ring, setRing] = useState<LonLat[]>([]);
+  const [drawing, setDrawing] = useState(false);
+  const drawingRef = useRef(false);
+  const [places, setPlaces] = useState<Place[]>([]);
 
   // ---- map setup (once)
   useEffect(() => {
@@ -154,7 +164,80 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
         },
       });
 
+      // Assistant results: a ring around each property it points to, and an outline of its hazard.
+      map.addSource('assistant', { type: 'geojson', data: EMPTY });
+      map.addLayer({
+        id: 'hazard-assistant',
+        type: 'line',
+        source: 'hazards',
+        filter: ['==', ['get', 'id'], ''],
+        paint: { 'line-color': '#7c3aed', 'line-width': 3, 'line-dasharray': [2, 1] },
+      });
+      map.addLayer({
+        id: 'assistant-ring',
+        type: 'circle',
+        source: 'assistant',
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 9, 12, 16],
+          'circle-color': 'rgba(124,58,237,0.15)',
+          'circle-stroke-color': '#7c3aed',
+          'circle-stroke-width': 2.5,
+        },
+      });
+      // Area search: the drawn shape and the businesses found inside it.
+      map.addSource('draw', { type: 'geojson', data: EMPTY });
+      map.addSource('places', { type: 'geojson', data: EMPTY });
+      map.addLayer({ id: 'draw-fill', type: 'fill', source: 'draw', filter: ['==', ['geometry-type'], 'Polygon'], paint: { 'fill-color': '#0ea5e9', 'fill-opacity': 0.12 } });
+      map.addLayer({ id: 'draw-line', type: 'line', source: 'draw', paint: { 'line-color': '#0369a1', 'line-width': 2, 'line-dasharray': [3, 2] } });
+      map.addLayer({
+        id: 'draw-corner',
+        type: 'circle',
+        source: 'draw',
+        filter: ['==', ['geometry-type'], 'Point'],
+        paint: { 'circle-radius': 4, 'circle-color': '#ffffff', 'circle-stroke-color': '#0369a1', 'circle-stroke-width': 2 },
+      });
+      map.addLayer({
+        id: 'place-dot',
+        type: 'circle',
+        source: 'places',
+        paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 2.5, 15, 6], 'circle-color': '#0369a1', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1 },
+      });
+
+      // While drawing, every click adds a corner and nothing else reacts to it.
+      map.on('click', (e) => {
+        if (!drawingRef.current) return;
+        setRing((prev) => {
+          // The second click of a double-click lands on the corner just added: skip it.
+          const last = prev[prev.length - 1];
+          if (last && map.project(last).dist(e.point) < 6) return prev;
+          return [...prev, [e.lngLat.lng, e.lngLat.lat]];
+        });
+      });
+      map.on('dblclick', (e) => {
+        if (!drawingRef.current) return;
+        e.preventDefault();
+        setDrawing(false);
+      });
+      map.on('click', 'place-dot', (e) => {
+        if (drawingRef.current) return;
+        const f = e.features?.[0];
+        if (!f) return;
+        const p = f.properties as Record<string, string>;
+        // Links come from public map data: only http(s) addresses are kept by the server, and all text is escaped here.
+        const link = (href: string, label: string) => (/^https?:\/\//i.test(href) ? `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${label}</a>` : '');
+        new maplibregl.Popup({ maxWidth: '300px' })
+          .setLngLat((f.geometry as GeoJSON.Point).coordinates as [number, number])
+          .setHTML(
+            `<strong>${escapeHtml(p.name ?? '')}</strong><div style="color:#6b7280">${escapeHtml(p.kind ?? '')}</div>` +
+              `<div>${escapeHtml([p.address, p.city, p.state, p.zip].filter(Boolean).join(', '))}</div>` +
+              (p.phone ? `<div>${escapeHtml(p.phone)}</div>` : '') +
+              `<div style="margin-top:4px">${[link(p.website ?? '', 'Website'), link(p.url ?? '', 'OpenStreetMap')].filter(Boolean).join(' · ')}</div>`,
+          )
+          .addTo(map);
+      });
+
       map.on('click', 'property-dot', (e) => {
+        if (drawingRef.current) return;
         const f = e.features?.[0];
         if (!f) return;
         const p = f.properties as Record<string, string>;
@@ -178,8 +261,9 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
           .addTo(map);
       });
       map.on('click', 'hazard-fill', (e) => {
-        // Property clicks take priority over the polygon underneath.
-        if (map.queryRenderedFeatures(e.point, { layers: ['property-dot'] }).length) return;
+        if (drawingRef.current) return;
+        // Property and business clicks take priority over the polygon underneath.
+        if (map.queryRenderedFeatures(e.point, { layers: ['property-dot', 'place-dot'] }).length) return;
         const props = e.features?.[0]?.properties as Record<string, string> | undefined;
         if (!props?.id) return;
         if (dataRef.current?.events.some((ev) => ev.id === props.id)) {
@@ -197,9 +281,13 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
           )
           .addTo(map);
       });
-      for (const layer of ['property-dot', 'hazard-fill']) {
-        map.on('mouseenter', layer, () => (map.getCanvas().style.cursor = 'pointer'));
-        map.on('mouseleave', layer, () => (map.getCanvas().style.cursor = ''));
+      for (const layer of ['property-dot', 'hazard-fill', 'place-dot']) {
+        map.on('mouseenter', layer, () => {
+          if (!drawingRef.current) map.getCanvas().style.cursor = 'pointer';
+        });
+        map.on('mouseleave', layer, () => {
+          if (!drawingRef.current) map.getCanvas().style.cursor = '';
+        });
       }
       setReady(true);
     });
@@ -300,6 +388,57 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected, ready, data === null]);
 
+  // ---- assistant results: highlight them and move the map there
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    (map.getSource('assistant') as maplibregl.GeoJSONSource).setData({
+      type: 'FeatureCollection',
+      features: (action?.points ?? []).map((p) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [p.lon, p.lat] }, properties: { id: p.id, name: p.name } })),
+    });
+    map.setFilter('hazard-assistant', ['==', ['get', 'id'], action?.eventId ?? '']);
+    if (!action) return;
+    const b = new maplibregl.LngLatBounds();
+    for (const p of action.points) b.extend([p.lon, p.lat]);
+    // With no properties to frame, frame the hazard itself.
+    if (action.points.length === 0 && action.bbox) {
+      b.extend([action.bbox[0], action.bbox[1]]);
+      b.extend([action.bbox[2], action.bbox[3]]);
+    }
+    if (!b.isEmpty()) map.fitBounds(b, { padding: 80, maxZoom: 13 });
+  }, [action, ready]);
+
+  // ---- area search: the shape being drawn
+  useEffect(() => {
+    drawingRef.current = drawing;
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    map.getCanvas().style.cursor = drawing ? 'crosshair' : '';
+    if (drawing) map.doubleClickZoom.disable();
+    else map.doubleClickZoom.enable();
+    const features: GeoJSON.Feature[] = ring.map((c) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: c }, properties: {} }));
+    if (ring.length >= 3) features.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [[...ring, ring[0]!]] }, properties: {} });
+    else if (ring.length === 2) features.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: ring }, properties: {} });
+    (map.getSource('draw') as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features: drawing ? features : features.filter((f) => f.geometry.type !== 'Point') });
+  }, [ring, drawing, ready]);
+
+  // ---- area search: the businesses found
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    (map.getSource('places') as maplibregl.GeoJSONSource).setData({
+      type: 'FeatureCollection',
+      features: places.map((p) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [p.lon, p.lat] }, properties: { ...p } })),
+    });
+    if (places.length && ring.length >= 3) {
+      const b = new maplibregl.LngLatBounds();
+      for (const c of ring) b.extend(c);
+      map.fitBounds(b, { padding: 60, maxZoom: 16 });
+    }
+    // Re-frame only when a new result set arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [places, ready]);
+
   const counts = useMemo(() => {
     const byClient = new Map<string, number>();
     for (const f of data?.properties.features ?? []) {
@@ -322,7 +461,44 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
   return (
     <div className="mapwrap">
       <aside className="sidebar">
+        <div className="tabs" role="tablist">
+          {(
+            [
+              ['alerts', 'Alerts'],
+              ['ask', 'Ask'],
+              ['area', 'Area search'],
+            ] as const
+          ).map(([id, label]) => (
+            <button key={id} type="button" role="tab" aria-selected={tab === id} className={tab === id ? 'on' : ''} onClick={() => setTab(id)}>
+              {label}
+            </button>
+          ))}
+        </div>
         {error && <div className="flash error">{error}</div>}
+        {/* The Ask and Area panels stay mounted while hidden so a conversation or a result list survives switching tabs. */}
+        <div hidden={tab !== 'ask'}>
+          <AssistantPanel onMap={setAction} />
+        </div>
+        <div hidden={tab !== 'area'}>
+          <AreaSearchPanel
+            ring={ring}
+            drawing={drawing}
+            onStartDrawing={() => {
+              setRing([]);
+              setPlaces([]);
+              setDrawing(true);
+            }}
+            onFinishDrawing={() => setDrawing(false)}
+            onClear={() => {
+              setRing([]);
+              setPlaces([]);
+              setDrawing(false);
+            }}
+            onResults={setPlaces}
+            onFocus={(lon, lat) => mapRef.current?.flyTo({ center: [lon, lat], zoom: Math.max(mapRef.current.getZoom(), 16) })}
+          />
+        </div>
+        <div hidden={tab !== 'alerts'}>
         <section>
           <h2>Affected right now</h2>
           <div className="stats">
@@ -416,6 +592,7 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
           ))}
           {data && data.clients.length === 0 && <p className="muted">No clients yet.</p>}
         </section>
+        </div>
         <p className="small muted">{DISCLAIMER}</p>
       </aside>
       <div className="map">
@@ -435,6 +612,17 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
             </button>
           ))}
         </div>
+        {action && (
+          <div className="map-note">
+            <span>
+              Showing: {action.title}
+              {action.points.length > 0 && ` (${action.points.length.toLocaleString()} propert${action.points.length === 1 ? 'y' : 'ies'})`}
+            </span>
+            <button type="button" className="secondary" onClick={() => setAction(null)}>
+              Clear
+            </button>
+          </div>
+        )}
         <div ref={container} className="canvas" />
       </div>
     </div>
