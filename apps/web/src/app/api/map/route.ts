@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { patternOf } from '@hazard/core';
 import { getSql } from '@hazard/db';
 import { getUser } from '@/lib/auth';
 import { isUuid } from '@/lib/form';
@@ -8,6 +9,7 @@ export const dynamic = 'force-dynamic';
 /**
  * Everything the map needs for the signed-in organization: clients, properties,
  * and the active hazard events that touch at least one of its properties.
+ * (The nationwide weather picture is served separately by /api/map/weather.)
  * `?event=<id>` additionally includes that event even if it has ended
  * (used by the "view on the map" link in notifications).
  */
@@ -19,11 +21,11 @@ export async function GET(request: Request) {
   const sql = getSql();
   const org = user.organizationId;
 
-  const [clients, properties, events, layers] = await Promise.all([
+  const [clients, properties, events] = await Promise.all([
     sql`SELECT id, name, color FROM clients WHERE organization_id = ${org} ORDER BY name`,
     sql`
       SELECT p.id, p.name, p.client_id, c.name AS client_name, c.color, p.property_type,
-        concat_ws(', ', p.address, p.city, p.state, p.zip) AS address,
+        concat_ws(', ', p.address, p.city, p.state, p.zip) AS address, upper(p.state) AS state,
         ST_X(p.location) AS lon, ST_Y(p.location) AS lat
       FROM properties p JOIN clients c ON c.id = p.client_id WHERE p.organization_id = ${org}`,
     sql`
@@ -36,15 +38,6 @@ export async function GET(request: Request) {
       WHERE e.status = 'active' ${focusId ? sql`OR e.id = ${focusId}` : sql``}
       GROUP BY e.id
       ORDER BY e.severity DESC, count(*) DESC`,
-    // Every active hazard from the non-NWS sources, nationwide, for the toggleable map layers.
-    // (NWS alerts are only drawn where they touch this organization's properties: there are hundreds.)
-    sql`
-      SELECT e.id, e.source, e.event_name, e.severity, e.headline,
-        ST_AsGeoJSON(ST_SimplifyPreserveTopology(
-          COALESCE(e.geometry, (SELECT ST_Union(z.geometry) FROM geo_zones z WHERE z.code = ANY(e.zone_codes))), 0.003), 4) AS geometry
-      FROM hazard_events e
-      WHERE e.status = 'active' AND e.source <> 'nws'
-      ORDER BY e.severity, e.first_seen_at DESC LIMIT 5000`,
   ]);
 
   const worst = new Map<string, { severity: string; rank: number }>();
@@ -72,6 +65,7 @@ export async function GET(request: Request) {
           color: p.color,
           address: p.address,
           propertyType: p.property_type,
+          state: p.state,
           impact: worst.get(p.id)?.severity ?? 'none',
         },
       })),
@@ -96,17 +90,7 @@ export async function GET(request: Request) {
         .map((e) => ({
           type: 'Feature',
           geometry: JSON.parse(e.geometry),
-          properties: { id: e.id, name: e.event_name, severity: e.severity, source: e.source },
-        })),
-    },
-    layers: {
-      type: 'FeatureCollection',
-      features: layers
-        .filter((e) => e.geometry)
-        .map((e) => ({
-          type: 'Feature',
-          geometry: JSON.parse(e.geometry),
-          properties: { id: e.id, name: e.event_name, severity: e.severity, source: e.source, headline: e.headline },
+          properties: { id: e.id, name: e.event_name, severity: e.severity, source: e.source, hazardType: e.hazard_type, pattern: patternOf(e.hazard_type), headline: e.headline, endsAt: e.ends_at, mine: true },
         })),
     },
   });

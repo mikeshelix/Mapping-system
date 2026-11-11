@@ -102,6 +102,22 @@ and set `OVERPASS_URL`. OpenStreetMap is volunteer-maintained, so coverage varie
 Overture Maps Places is a fuller alternative but is distributed as large data files rather than a query service; it would
 need to be loaded into PostGIS on a schedule.
 
+## The map screen
+
+One screen shows everything, with no tabs to switch between:
+
+- **Weather** is picked by pattern (storms and hail, tornado, flood, hurricane, wildfire, winter, heat, earthquake, other, plus
+  live radar), each in its own color, with a count of active alerts. "At my locations" shows only weather touching the
+  portfolio; "Everywhere" shows the whole country. Darker shading means more severe. Patterns are defined in
+  `packages/core/src/weather.ts`; every hazard type belongs to exactly one.
+- **Locations** can be filtered by client and location type, limited to affected ones, and colored by client, type or
+  status. Nearby pins merge into a numbered bubble (red edge when one inside is affected) until you zoom in.
+- **Search** finds a location by name, client or address. Clicking a pin opens a card with what is affecting it and who gets alerts.
+- **Ask a question** and **Find businesses in an area** open in a panel on the right of the same map.
+
+The top menu has four items: Map, Portfolio (clients, locations, contacts, import), Alerts (affected now, rules, sent
+messages) and Admin (data feeds, users, settings).
+
 ## Layout
 
 ```

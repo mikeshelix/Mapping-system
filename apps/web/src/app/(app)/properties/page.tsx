@@ -25,10 +25,10 @@ export default async function PropertiesPage({ searchParams }: { searchParams: S
 
   return (
     <div className="page">
-      <h1>Properties</h1>
+      <h1>Locations</h1>
       <Flash search={searchParams} />
       <div className="card">
-        <h2>Add a property</h2>
+        <h2>Add a location</h2>
         {clients.length === 0 ? (
           <p className="muted">
             Add a <Link href="/clients">client</Link> first. To add many properties at once, use{' '}

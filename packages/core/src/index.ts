@@ -8,3 +8,4 @@ export * from './sources';
 export * from './reporting';
 export * from './assistant';
 export * from './places';
+export * from './weather';

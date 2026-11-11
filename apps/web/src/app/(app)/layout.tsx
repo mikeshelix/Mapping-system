@@ -1,7 +1,7 @@
-import Link from 'next/link';
 import { getFeedHealth, getSql } from '@hazard/db';
 import { requireUser } from '@/lib/auth';
 import { logout } from '@/app/actions/auth';
+import { MainNav, SubNav } from '@/components/Nav';
 
 export const dynamic = 'force-dynamic';
 
@@ -22,17 +22,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <div className="shell">
       <nav className="topbar">
         <span className="brand">Hazard Alerts</span>
-        <Link href="/">Map</Link>
-        <Link href="/impacts">Impacts</Link>
-        <Link href="/clients">Clients</Link>
-        <Link href="/properties">Properties</Link>
-        <Link href="/contacts">Contacts</Link>
-        <Link href="/import">Import</Link>
-        <Link href="/rules">Rules</Link>
-        <Link href="/notifications">Notifications</Link>
-        <Link href="/feeds">Feeds</Link>
-        {user.role === 'admin' && <Link href="/users">Users</Link>}
-        {user.role === 'admin' && <Link href="/settings">Settings</Link>}
+        <MainNav isAdmin={user.role === 'admin'} />
         <span className="spacer" />
         <span className="who">
           {user.name} · {user.organizationName}
@@ -41,6 +31,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <button type="submit">Sign out</button>
         </form>
       </nav>
+      <SubNav isAdmin={user.role === 'admin'} />
       {feeds.length === 0 && (
         <div className="banner">
           No hazard feed has reported yet. The worker process may not be running, so alerts are not being checked.
