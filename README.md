@@ -59,13 +59,56 @@ Status: **Phase 1 (core alerting)**, **Phase 2 (more hazards, map layers, impact
 
 All accept `?client=<id>` and `?severity=<minimum>`. Text that a spreadsheet would run as a formula is neutralized.
 
+## What is in Phase 4
+
+- **Assistant** (Ask tab on the map): staff ask questions about the portfolio in plain language. The model answers only from
+  seven defined lookups, and can move the map to the properties or hazard it found.
+- **Area search** (Area search tab): draw a shape on the map and list the businesses inside it, with your own properties in
+  the shape listed first and a CSV download.
+- **Usage metering**: every question is stored with its token counts and estimated cost, for per-transaction pricing.
+
+### How the assistant is kept safe
+
+- **Read-only by construction.** The lookups (`packages/db/src/assistant.ts`) run inside a `READ ONLY` database transaction
+  with an 8-second statement timeout. There is no tool that writes, sends or deletes.
+- **One organization only.** The organization comes from the signed-in session and is applied in every query; nothing the
+  model sends can widen it. `show_on_map` drops any id that belongs to another organization. Tests cover this with two organizations.
+- **No free-form SQL.** The model chooses a lookup and filters; filters are reduced to allowed values and passed as parameters.
+- **Less personal data.** Contact emails and phone numbers are never returned to the model, only contact names.
+  Property names, addresses, client names and declared values are sent to Anthropic when a question needs them.
+- **Bounded cost.** At most 8 round trips per question, a monthly question limit per organization (admin setting, default 300),
+  and a platform-wide monthly dollar ceiling (`ASSISTANT_MONTHLY_BUDGET_USD`, default 150) after which the assistant pauses.
+
+The lookups: `portfolio_summary`, `search_properties`, `active_hazards`, `affected_properties`, `hazard_history`,
+`notification_summary`, `show_on_map`.
+
+### What a question costs
+
+Each question is logged in `assistant_usage` (question, who asked, model, requests, lookups, input/output/cached tokens,
+estimated cost, duration). Settings shows this month's count, total, average and most expensive question, and admins can
+download the log as CSV (`/api/export/assistant`). Cost is estimated from the price table in `packages/core/src/assistant.ts`
+(update it when prices change); the Anthropic invoice is the final figure. On a developer machine the app also accepts a
+sign-in saved by `ant auth login`; servers should set `ANTHROPIC_API_KEY`. The default model is `claude-opus-5-5`
+($4 per million input tokens, $20 per million output); `ASSISTANT_MODEL` and `ASSISTANT_EFFORT` change the model and how
+much it deliberates.
+
+### Area search data
+
+Businesses come from OpenStreetMap through the Overpass API: free, no key, credited as "© OpenStreetMap contributors"
+(ODbL licence). The public server asks for at most about 10,000 requests and 1 GB a day in total, so searches are limited to
+100 square miles, 2,000 results and a daily count per organization (admin setting, default 200). It can be slow or refuse
+requests when busy; the app retries once and waits up to a minute. For production volume, run your own Overpass server
+and set `OVERPASS_URL`. OpenStreetMap is volunteer-maintained, so coverage varies and some businesses are missing.
+Overture Maps Places is a fuller alternative but is distributed as large data files rather than a query service; it would
+need to be loaded into PostGIS on a schedule.
+
 ## Layout
 
 ```
-apps/web        Next.js (App Router): screens, server actions, /api/map
+apps/web        Next.js (App Router): screens, server actions, /api/map, /api/assistant, /api/places
 apps/worker     Node process: feed polling, matching, notification sending
 packages/core   Pure logic: severity scale, NWS normalization, dedup, rule evaluation, message text, Census client
-packages/db     SQL migrations, database client, and the engine (ingest, match, queue notifications)
+packages/db     SQL migrations, database client, the engine (ingest, match, queue notifications), assistant lookups
 ```
 
 ## Running it locally
@@ -222,3 +265,8 @@ Twilio is a paid, usage-based service and US numbers must be registered (A2P 10D
   (hail-free) MRMS file, not by live matches.
 - Exposure percentages are planning assumptions set by an admin; they are not derived from loss data.
 - NWS alerts are drawn on the map only where they touch your properties; other sources are drawn nationwide.
+- The assistant was run live on four questions against a seven-property test portfolio: answers matched the database,
+  the map moved, and a request to delete, email and read other organizations was declined. Cost was $0.025 to $0.042
+  per question on `claude-opus-5-5`. It has not been measured on a portfolio of thousands of properties, where
+  lookups return more text and cost more.
+- The public Overpass server took 30 to 35 seconds per search and refused some requests while this was built.

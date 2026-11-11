@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.8.0",
     "@hazard/core": "workspace:*",
     "@hazard/db": "workspace:*",
     "dotenv": "^16.6.1",

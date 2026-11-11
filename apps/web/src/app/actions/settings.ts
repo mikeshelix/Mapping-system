@@ -37,6 +37,23 @@ export async function saveExposureFactors(form: FormData): Promise<void> {
   back('/settings', 'notice', 'Exposure percentages saved.');
 }
 
+/** Monthly limit on assistant questions and daily limit on area searches, for this organization. */
+export async function saveUsageLimits(form: FormData): Promise<void> {
+  const admin = await requireAdmin();
+  const questions = Number(str(form, 'assistant_monthly'));
+  const searches = Number(str(form, 'area_daily'));
+  const valid = (n: number, max: number) => Number.isInteger(n) && n >= 0 && n <= max;
+  if (!valid(questions, 100_000) || !valid(searches, 5_000)) {
+    back('/settings', 'error', 'Limits must be whole numbers: up to 100,000 questions a month and 5,000 area searches a day.');
+  }
+  await getSql()`
+    UPDATE organizations
+    SET settings = settings || ${JSON.stringify({ assistantMonthlyCap: questions, areaSearchDailyCap: searches })}::text::jsonb
+    WHERE id = ${admin.organizationId}`;
+  revalidatePath('/settings');
+  back('/settings', 'notice', 'Usage limits saved.');
+}
+
 /** Feed switches and matching distances apply to every organization, so only platform admins may change them. */
 export async function saveFeedSetting(form: FormData): Promise<void> {
   const admin = await requireAdmin();

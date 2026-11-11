@@ -81,3 +81,20 @@ legend { font-size: 12px; color: var(--muted); font-weight: 600; padding: 0 4px;
 .template { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--text); background: #fff; }
 .template:hover { border-color: var(--accent); text-decoration: none; }
 button:disabled { opacity: .6; cursor: default; }
+
+/* Phase 4: sidebar tabs, assistant, area search */
+.tabs { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--border); }
+.tabs button { flex: 1; background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; color: var(--muted); padding: 8px 4px; font-weight: 600; }
+.tabs button.on { color: var(--accent); border-bottom-color: var(--accent); }
+textarea { font: inherit; padding: 7px 9px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: var(--text); width: 100%; resize: vertical; margin-bottom: 8px; }
+.assistant .example { display: block; width: 100%; text-align: left; background: #fff; color: var(--text); border: 1px solid var(--border); margin-bottom: 6px; }
+.assistant .example:hover:not(:disabled) { border-color: var(--accent); }
+.turns { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.turn { padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.turn.user { background: #e0e7ff; align-self: flex-end; max-width: 90%; }
+.turn.assistant { background: #f1f5f9; }
+.turn.problem { background: #fee2e2; color: #7f1d1d; }
+.place { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; background: #fff; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 9px; margin-bottom: 4px; }
+.place.own { border-left: 4px solid var(--accent); }
+.map-note { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 2; background: #fff; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,.3); padding: 5px 6px 5px 12px; display: flex; gap: 10px; align-items: center; max-width: 60%; }
+.map-note button { padding: 3px 10px; }

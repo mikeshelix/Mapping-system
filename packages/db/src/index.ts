@@ -3,3 +3,4 @@ export * from './engine';
 export * from './password';
 export * from './sources';
 export * from './reporting';
+export * from './assistant';
