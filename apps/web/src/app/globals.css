@@ -142,3 +142,26 @@ button.textlink { background: none; border: none; padding: 0; color: var(--accen
 .contact-row { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); }
 .alert-item .pill { font-size: 11px; padding: 0 6px; }
 @media (max-width: 1100px) { .drawer { position: absolute; right: 0; top: 0; bottom: 0; z-index: 4; box-shadow: -4px 0 16px rgba(0,0,0,.2); } .mapwrap { position: relative; } }
+
+/* Google Maps sources under an assistant answer. Google's attribution rules: 12-16px, #5E5E5E or #1F1F1F, "Google Maps" on one line. */
+.gmaps-sources { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-family: Roboto, system-ui, sans-serif; font-size: 12px; font-weight: 400; color: #5e5e5e; }
+.gmaps-sources span { white-space: nowrap; }
+.gmaps-sources a { display: block; margin-top: 4px; font-size: 13px; color: #1f1f1f; text-decoration: underline; overflow-wrap: anywhere; }
+
+/* Directions links */
+.button-link { display: inline-block; margin-top: 10px; padding: 8px 14px; border-radius: 6px; background: var(--accent); color: #fff; font-weight: 600; text-decoration: none; }
+.button-link:hover { filter: brightness(0.93); }
+.place-row { display: flex; align-items: center; gap: 8px; }
+.place-row .place { flex: 1; min-width: 0; }
+.place-row a { white-space: nowrap; }
+
+/* Find businesses inside an alert */
+.find-here { display: block; margin-top: 6px; color: var(--accent); font-weight: 600; text-decoration: underline; cursor: pointer; }
+.popup-find { margin-top: 8px; width: 100%; }
+
+/* Forecast on a location card */
+.forecast-row { display: flex; gap: 10px; padding: 6px 8px; border-bottom: 1px solid var(--border); border-left: 4px solid transparent; }
+.forecast-row .when { flex: 0 0 84px; font-weight: 600; }
+.forecast-row .what { flex: 1; min-width: 0; }
+.forecast-row.watch { border-left-color: #d97706; background: #fffbeb; }
+.forecast-row .concern { color: #92400e; font-weight: 600; }

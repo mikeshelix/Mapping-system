@@ -225,3 +225,16 @@ export function readAreaSearchCap(settings: unknown): number {
   const v = ((settings ?? {}) as { areaSearchDailyCap?: unknown }).areaSearchDailyCap;
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : DEFAULT_AREA_SEARCH_DAILY_CAP;
 }
+
+// ------------------------------------------------------------------ directions
+
+/**
+ * A link that opens Google Maps with directions to a point, starting from wherever the
+ * person is. This is a plain Maps URL: no API, no key and no charge. Format verified on
+ * 2026-11-23: https://developers.google.com/maps/documentation/urls/get-started
+ */
+export function directionsUrl(lat: number, lon: number): string | null {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  // Six decimals is about four inches; the comma has to be sent as %2C.
+  return `https://www.google.com/maps/dir/?api=1&destination=${lat.toFixed(6)}%2C${lon.toFixed(6)}`;
+}

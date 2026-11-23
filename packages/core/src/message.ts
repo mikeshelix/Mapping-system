@@ -138,3 +138,52 @@ export function classifyInboundSms(body: string, optOutType?: string | null): 's
   if (word === 'help' || word === 'info') return 'help';
   return 'other';
 }
+
+// ------------------------------------------------------------------ forecast heads-up
+
+export const FORECAST_DISCLAIMER =
+  'This is a forecast from the National Weather Service, not a warning, and forecasts change. Official watches and warnings are sent separately. Always follow instructions from the National Weather Service and local emergency officials.';
+
+export interface ForecastEmailInput {
+  contactName: string;
+  /** Only the periods that are new to this contact. */
+  properties: Array<{ name: string; address: string | null; clientName: string; periods: Array<{ name: string; shortForecast: string; concerns: string[] }> }>;
+  mapUrl: string;
+}
+
+export function renderForecastEmail(m: ForecastEmailInput): RenderedMessage {
+  const count = m.properties.length;
+  const concerns = [...new Set(m.properties.flatMap((p) => p.periods.flatMap((x) => x.concerns)))];
+  const what = concerns.length <= 2 ? concerns.join(' and ').toLowerCase() : 'weather worth watching';
+  const subject = `Weather heads-up: ${what} forecast at ${count === 1 ? m.properties[0]!.name : `${count} locations`}`;
+  const line = (x: { name: string; shortForecast: string; concerns: string[] }) => `${x.name}: ${x.shortForecast} (${x.concerns.join(', ').toLowerCase()})`;
+
+  const text = [
+    `Hello ${m.contactName},`,
+    '',
+    `The forecast for the next two days shows weather worth watching at ${count === 1 ? 'this location' : `these ${count} locations`}:`,
+    '',
+    ...m.properties.flatMap((p) => [`${p.name}${p.address ? `, ${p.address}` : ''} [${p.clientName}]`, ...p.periods.map((x) => `  - ${line(x)}`), '']),
+    `View on the map: ${m.mapUrl}`,
+    '',
+    FORECAST_DISCLAIMER,
+  ].join('\n');
+
+  const blocks = m.properties
+    .map(
+      (p) =>
+        `<div style="margin:12px 0;padding:8px 12px;border-left:6px solid #d97706;background:#fffbeb">` +
+        `<div style="font-weight:bold">${esc(p.name)}</div>` +
+        `<div style="color:#4b5563;font-size:13px">${esc([p.address, p.clientName].filter(Boolean).join(' · '))}</div>` +
+        `<ul style="margin:6px 0 0;padding-left:18px">${p.periods.map((x) => `<li>${esc(line(x))}</li>`).join('')}</ul></div>`,
+    )
+    .join('');
+  const html = `<div style="font-family:Arial,Helvetica,sans-serif;font-size:14px;color:#111827;max-width:640px">
+<p>Hello ${esc(m.contactName)},</p>
+<p>The forecast for the next two days shows weather worth watching at ${count === 1 ? 'this location' : `these ${count} locations`}:</p>
+${blocks}
+<p><a href="${esc(m.mapUrl)}">View on the map</a></p>
+<p style="font-size:12px;color:#6b7280">${esc(FORECAST_DISCLAIMER)}</p>
+</div>`;
+  return { subject, html, text };
+}

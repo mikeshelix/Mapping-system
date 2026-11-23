@@ -129,6 +129,50 @@ export const ASSISTANT_TOOLS: AssistantToolDef[] = [
 
 export const ASSISTANT_TOOL_NAMES = ASSISTANT_TOOLS.map((t) => t.name);
 
+// ------------------------------------------------------------------ Google place search (optional)
+
+/** A Google Maps source that has to be shown, with its link, under any answer that used it. */
+export interface PlaceSource {
+  title: string;
+  url: string;
+}
+
+/**
+ * Offered to the model only when a Google Maps Platform key is configured. Unlike the
+ * tools above it leaves the platform: it asks Google's Maps Experience agent tools.
+ */
+export const PLACES_TOOL: AssistantToolDef = {
+  name: 'nearby_businesses',
+  description:
+    'Look up real-world businesses and places from Google Maps: for example roofers, hardware stores, hotels, hospitals or equipment rental near one of the portfolio properties or in a named town. Returns a short written summary and up to five places. Give property_id (from an earlier tool result) to search around that property, or name the place in near. Use it only when the user asks about businesses or places outside the portfolio.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      query: { type: 'string', description: 'What to look for, e.g. "emergency roof repair" or "hotels".' },
+      property_id: { type: 'string', description: 'Id of a portfolio property to search around.' },
+      near: { type: 'string', description: 'A town, city or address to search near, when no property is given.' },
+    },
+    required: ['query'],
+  },
+};
+
+/** Added to the instructions when the Google tool is offered. */
+export const PLACES_SYSTEM = `
+Businesses and places outside the portfolio:
+- nearby_businesses asks Google Maps. Its results are the only source for businesses; never add a business, rating, phone number or opening hours that is not in its result.
+- Name each business exactly as the result gives it. The app lists the Google Maps links under your answer, so do not write web addresses yourself.
+- Do not pass these businesses to show_on_map; it only takes portfolio properties and hazards.
+- These are listings, not recommendations. Do not vouch for a business.`;
+
+export const PLACES_RESULT_MAX = 5;
+/** Monthly ceiling on Google lookups across the whole platform, kept under Google's 10,000 no-charge requests. */
+export const DEFAULT_PLACES_MONTHLY_CAP = 9000;
+
+export function readPlacesCap(value: string | undefined): number {
+  const v = Number(value);
+  return value && Number.isInteger(v) && v >= 0 ? v : DEFAULT_PLACES_MONTHLY_CAP;
+}
+
 /** Fixed instructions. Keep this free of dates and per-user details so it can be cached. */
 export const ASSISTANT_SYSTEM = `You answer questions from staff about their organization's portfolio of client properties and the weather and natural hazards affecting it, inside a property hazard alert platform.
 

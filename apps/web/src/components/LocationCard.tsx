@@ -1,6 +1,7 @@
 'use client';
 
-import { HAZARD_LABELS, SEVERITY_COLORS, SEVERITY_LABELS, type HazardType, type Severity } from '@hazard/core';
+import { useEffect, useState } from 'react';
+import { type ForecastPeriod, HAZARD_LABELS, SEVERITY_COLORS, SEVERITY_LABELS, directionsUrl, type HazardType, type Severity } from '@hazard/core';
 
 export interface LocationDetail {
   id: string;
@@ -8,6 +9,8 @@ export interface LocationDetail {
   address: string;
   propertyType: string | null;
   declaredValue: number | null;
+  lon: number;
+  lat: number;
   placedBy: 'pin' | 'address';
   client: string;
   clientColor: string;
@@ -15,10 +18,60 @@ export interface LocationDetail {
   contacts: Array<{ id: string; name: string; email: boolean; text: boolean }>;
 }
 
+type Forecast = { status: 'loading' | 'outside' | 'unavailable' } | { status: 'ok'; periods: ForecastPeriod[]; source: string };
+
+/** The next three days at this location. Loaded on its own so a slow forecast never holds up the card. */
+function ForecastSection({ propertyId }: { propertyId: string }) {
+  const [forecast, setForecast] = useState<Forecast>({ status: 'loading' });
+  useEffect(() => {
+    let current = true;
+    setForecast({ status: 'loading' });
+    fetch(`/api/property/${propertyId}/forecast`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((json: Forecast) => current && setForecast(json))
+      .catch(() => current && setForecast({ status: 'unavailable' }));
+    return () => {
+      current = false;
+    };
+  }, [propertyId]);
+
+  if (forecast.status === 'loading') return <p className="muted">Loading the forecast…</p>;
+  if (forecast.status === 'outside') return <p className="muted">Forecasts cover locations in the United States only.</p>;
+  if (forecast.status !== 'ok') return <p className="muted">The forecast is not available right now. Close and reopen this location to try again.</p>;
+  return (
+    <>
+      {forecast.periods.map((p) => (
+        <div key={p.startTime} className={`forecast-row${p.concerns.length ? ' watch' : ''}`} title={p.detailedForecast}>
+          <div className="when">{p.name}</div>
+          <div className="what">
+            <div>
+              {p.shortForecast}
+              {p.temperature !== null && (
+                <span className="muted">
+                  {' '}
+                  · {p.isDaytime ? 'High' : 'Low'} {p.temperature}°{p.temperatureUnit}
+                </span>
+              )}
+            </div>
+            <div className="small muted">
+              {[p.precipChance !== null && p.precipChance > 0 ? `${p.precipChance}% chance of rain or snow` : null, p.wind ? `Wind ${p.wind}` : null].filter(Boolean).join(' · ')}
+            </div>
+            {p.concerns.length > 0 && <div className="small concern">Worth watching: {p.concerns.join(', ').toLowerCase()}</div>}
+          </div>
+        </div>
+      ))}
+      <p className="small muted" style={{ marginTop: 6 }}>
+        Forecast from the {forecast.source}. Official warnings appear above under Affecting it now.
+      </p>
+    </>
+  );
+}
+
 /** Everything about one location, shown beside the map when its pin is clicked. */
 export function LocationCard({ detail, failed, onAlert }: { detail: LocationDetail | null; failed: boolean; onAlert: (eventId: string, hazardType: string) => void }) {
   if (failed) return <div className="flash error">This location could not be loaded. Click its pin to try again.</div>;
   if (!detail) return <p className="muted">Loading…</p>;
+  const directions = directionsUrl(detail.lat, detail.lon);
   return (
     <div className="location-card">
       <h3>{detail.name}</h3>
@@ -31,6 +84,13 @@ export function LocationCard({ detail, failed, onAlert }: { detail: LocationDeta
       <div className="muted small" style={{ marginTop: 4 }}>
         Declared value: {detail.declaredValue === null ? 'not set' : `$${Math.round(detail.declaredValue).toLocaleString()}`}
       </div>
+
+      {directions && (
+        <a className="button-link" href={directions} target="_blank" rel="noopener noreferrer">
+          Get directions
+        </a>
+      )}
+      {directions && <div className="small muted">Opens Google Maps in a new tab, from where you are now.</div>}
 
       <h4>Affecting it now</h4>
       {detail.alerts.length === 0 && <p className="ok">Nothing is affecting this location right now.</p>}
@@ -47,6 +107,9 @@ export function LocationCard({ detail, failed, onAlert }: { detail: LocationDeta
           {a.headline && <div className="small muted" style={{ marginTop: 4 }}>{a.headline}</div>}
         </button>
       ))}
+
+      <h4>Forecast</h4>
+      <ForecastSection propertyId={detail.id} />
 
       <h4>Who gets alerts</h4>
       {detail.contacts.length === 0 && (

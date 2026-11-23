@@ -5,6 +5,7 @@ import type { Channel } from '@hazard/core';
 import { evaluatePendingEvents, getSql } from '@hazard/db';
 import { fetchMissingZones, NWS_FEED, pollNwsAlerts } from './nws';
 import { FEEDS, runFeed } from './feeds';
+import { runForecastHeadsUps } from './forecast';
 import { createEmailProvider, createSmsProvider } from './providers';
 import { alertOnStaleFeeds, sendQueued } from './sender';
 import { backoffMs, errorMessage, log, sleep } from './util';
@@ -24,6 +25,8 @@ const feeds = FEEDS.filter((f) => !f.available || f.available());
 const appBaseUrl = process.env.APP_BASE_URL || 'http://localhost:3000';
 // NWS asks for no more than one request every 30 seconds.
 const nwsPollSeconds = Math.max(30, Number(process.env.NWS_POLL_SECONDS) || 60);
+// The Weather Service refreshes a forecast about hourly; checking every three hours is plenty for a two-day look-ahead.
+const forecastPollSeconds = Math.max(900, Number(process.env.FORECAST_POLL_SECONDS) || 10_800);
 const nwsStaleSeconds = Number(process.env.NWS_STALE_AFTER_SECONDS) || 600;
 
 const jobs: Job[] = [
@@ -31,6 +34,7 @@ const jobs: Job[] = [
   { name: 'nws-zones', intervalMs: 15_000, run: () => fetchMissingZones(sql) },
   ...feeds.map((f) => ({ name: f.feed, intervalMs: f.pollSeconds * 1000, run: () => runFeed(sql, f) })),
   { name: 'evaluate', intervalMs: 10_000, run: () => evaluatePendingEvents(sql, { appBaseUrl, enabledChannels }) },
+  { name: 'forecast-heads-ups', intervalMs: forecastPollSeconds * 1000, run: () => runForecastHeadsUps(sql, { appBaseUrl }) },
   { name: 'send', intervalMs: 10_000, run: () => sendQueued(sql, email, sms) },
   { name: 'feed-health', intervalMs: 60_000, run: () => alertOnStaleFeeds(sql) },
 ];

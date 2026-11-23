@@ -6,7 +6,7 @@
  * without a network or an API key.
  */
 import type Anthropic from '@anthropic-ai/sdk';
-import { ASSISTANT_SYSTEM, ASSISTANT_TOOLS, ZERO_USAGE, addUsage, type TokenUsage } from '@hazard/core';
+import { ASSISTANT_SYSTEM, ASSISTANT_TOOLS, ZERO_USAGE, addUsage, type AssistantToolDef, type PlaceSource, type TokenUsage } from '@hazard/core';
 import type { MapAction, ToolOutcome } from '@hazard/db';
 
 type BetaMessage = Anthropic.Beta.Messages.BetaMessage;
@@ -14,7 +14,8 @@ type BetaMessageParam = Anthropic.Beta.Messages.BetaMessageParam;
 type CreateParams = Anthropic.Beta.Messages.MessageCreateParamsNonStreaming;
 
 export type CreateMessage = (params: CreateParams) => Promise<BetaMessage>;
-export type RunTool = (name: string, input: unknown) => Promise<ToolOutcome>;
+/** A tool may also hand back outside sources (Google Maps places) that must be listed under the answer. */
+export type RunTool = (name: string, input: unknown) => Promise<ToolOutcome & { sources?: PlaceSource[] }>;
 export type Effort = 'low' | 'medium' | 'high';
 
 export interface HistoryTurn {
@@ -27,6 +28,8 @@ export interface AskResult {
   status: 'ok' | 'refused' | 'incomplete';
   answer: string;
   map: MapAction | null;
+  /** Outside sources the answer drew on, in the order they were returned, without repeats. */
+  sources: PlaceSource[];
   usage: TokenUsage;
   requests: number;
   toolCalls: number;
@@ -47,6 +50,8 @@ export async function askAssistant(opts: {
   history?: HistoryTurn[];
   /** e.g. "Tuesday, November 10, 2026". Sent with the question, not in the system prompt, so the prompt stays cacheable. */
   today: string;
+  /** Tools offered only in some set-ups, with the instructions that go with them. Added after the fixed ones. */
+  extra?: { tools: AssistantToolDef[]; system: string };
 }): Promise<AskResult> {
   const messages: BetaMessageParam[] = [
     ...(opts.history ?? []).map((h): BetaMessageParam => ({ role: h.role, content: h.text })),
@@ -56,15 +61,16 @@ export async function askAssistant(opts: {
   let requests = 0;
   let toolCalls = 0;
   let map: MapAction | null = null;
-  const done = (status: AskResult['status'], answer: string): AskResult => ({ status, answer, map, usage, requests, toolCalls });
+  const sources: PlaceSource[] = [];
+  const done = (status: AskResult['status'], answer: string): AskResult => ({ status, answer, map, sources, usage, requests, toolCalls });
 
   while (requests < MAX_REQUESTS) {
     requests++;
     const message = await opts.create({
       model: opts.model,
       max_tokens: 16000,
-      system: ASSISTANT_SYSTEM,
-      tools: ASSISTANT_TOOLS,
+      system: opts.extra ? ASSISTANT_SYSTEM + opts.extra.system : ASSISTANT_SYSTEM,
+      tools: opts.extra ? [...ASSISTANT_TOOLS, ...opts.extra.tools] : ASSISTANT_TOOLS,
       messages,
       // Caches the instructions, tool list and the conversation so far between round trips.
       cache_control: { type: 'ephemeral' },
@@ -100,6 +106,7 @@ export async function askAssistant(opts: {
         try {
           const outcome = await opts.runTool(call.name, call.input);
           if (outcome.map) map = outcome.map;
+          for (const src of outcome.sources ?? []) if (!sources.some((x) => x.url === src.url)) sources.push(src);
           let content = JSON.stringify(outcome.result);
           if (content.length > MAX_TOOL_RESULT_CHARS) content = JSON.stringify({ error: 'The result was too large. Narrow the filters or lower the limit.' });
           return { type: 'tool_result', tool_use_id: call.id, content };

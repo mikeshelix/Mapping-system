@@ -202,3 +202,13 @@ describe('business results', () => {
     expect(classifyPlace({ shop: 'vacant' })).toBeNull();
   });
 });
+
+describe('directions link', () => {
+  it('opens Google Maps directions to the point, with the comma encoded', async () => {
+    const { directionsUrl } = await import('./places');
+    expect(directionsUrl(47.2151, -123.1007)).toBe('https://www.google.com/maps/dir/?api=1&destination=47.215100%2C-123.100700');
+    expect(directionsUrl(91, 0)).toBeNull();
+    expect(directionsUrl(0, 181)).toBeNull();
+    expect(directionsUrl(Number.NaN, 5)).toBeNull();
+  });
+});

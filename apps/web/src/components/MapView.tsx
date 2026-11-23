@@ -127,6 +127,47 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
   const [drawing, setDrawing] = useState(false);
   const drawingRef = useRef(false);
   const [places, setPlaces] = useState<Place[]>([]);
+  // Where the search area came from when it was taken from an alert, or why that failed.
+  const [areaNotice, setAreaNotice] = useState<{ text: string; problem: boolean } | null>(null);
+  // Changing this remounts the business panel, clearing an earlier result list.
+  const [areaKey, setAreaKey] = useState(0);
+
+  /** Use the part of an alert that is on screen as the business search area. */
+  const findInAlert = async (eventId: string, name: string) => {
+    const map = mapRef.current;
+    if (!map) return;
+    const b = map.getBounds();
+    setDrawing(false);
+    setPlaces([]);
+    setRing([]);
+    setAreaKey((k) => k + 1);
+    setDrawer('area');
+    setAreaNotice({ text: `Working out the area of ${name}…`, problem: false });
+    try {
+      const res = await fetch(`/api/hazard/${eventId}/area?view=${[b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((n) => n.toFixed(5)).join(',')}`, { cache: 'no-store' });
+      if (res.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
+      const json = (await res.json().catch(() => ({}))) as { error?: string; ring?: LonLat[]; pieces?: number; name?: string };
+      if (!res.ok || !json.ring) {
+        setAreaNotice({ text: json.error ?? 'The alert area could not be loaded. Please try again.', problem: true });
+        return;
+      }
+      setRing(json.ring);
+      setAreaNotice({
+        text:
+          `Area taken from the alert: ${json.name ?? name}.` +
+          ((json.pieces ?? 1) > 1 ? ` The alert has ${json.pieces} separate pieces on screen; the largest is used.` : '') +
+          ' Pick a kind of business and press Find businesses.',
+        problem: false,
+      });
+    } catch {
+      setAreaNotice({ text: 'The alert area could not be loaded. Check your connection and try again.', problem: true });
+    }
+  };
+  const findInAlertRef = useRef(findInAlert);
+  findInAlertRef.current = findInAlert;
 
   const openLocation = useCallback((id: string) => {
     setDrawer('location');
@@ -325,7 +366,7 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
         const own = dataRef.current?.events.find((ev) => ev.id === props.id);
         if (own) setSelected(props.id);
         const pattern = WEATHER_PATTERNS.find((w) => w.id === props.pattern);
-        new maplibregl.Popup({ maxWidth: '320px' })
+        const popup = new maplibregl.Popup({ maxWidth: '320px' })
           .setLngLat(e.lngLat)
           .setHTML(
             `<strong>${escapeHtml(props.name ?? '')}</strong>` +
@@ -333,9 +374,14 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
               `${escapeHtml(pattern?.label ?? 'Weather')} · ${SEVERITY_LABELS[props.severity as Severity] ?? ''}</div>` +
               (props.headline && props.headline !== 'null' ? `<div style="margin-top:4px">${escapeHtml(props.headline)}</div>` : '') +
               `<div style="color:#6b7280;margin-top:4px">Source: ${escapeHtml(SOURCE_NAMES[props.source as SourceId] ?? props.source ?? '')}</div>` +
-              `<div style="margin-top:4px;font-weight:600">${own ? `${own.propertyIds.length} of your locations affected` : 'None of your locations are affected'}</div>`,
+              `<div style="margin-top:4px;font-weight:600">${own ? `${own.propertyIds.length} of your locations affected` : 'None of your locations are affected'}</div>` +
+              `<button type="button" class="popup-find">Find businesses in this area</button>`,
           )
           .addTo(map);
+        popup.getElement()?.querySelector('.popup-find')?.addEventListener('click', () => {
+          popup.remove();
+          void findInAlertRef.current(props.id!, props.name ?? 'this alert');
+        });
       });
       for (const layer of ['property-dot', 'cluster', 'hazard-fill', 'place-dot']) {
         map.on('mouseenter', layer, () => {
@@ -788,6 +834,24 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
                         Official alert
                       </a>
                     )}
+                    {/* The alert row is itself a button, so this is a link-styled control inside it. */}
+                    <span
+                      role="button"
+                      tabIndex={0}
+                      className="find-here"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        void findInAlert(e.id, e.name);
+                      }}
+                      onKeyDown={(ev) => {
+                        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        void findInAlert(e.id, e.name);
+                      }}
+                    >
+                      Find businesses in this area
+                    </span>
                   </div>
                 )}
               </button>
@@ -849,15 +913,19 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
         </div>
         <div hidden={drawer !== 'area'}>
           <AreaSearchPanel
+            key={areaKey}
+            notice={areaNotice}
             ring={ring}
             drawing={drawing}
             onStartDrawing={() => {
+              setAreaNotice(null);
               setRing([]);
               setPlaces([]);
               setDrawing(true);
             }}
             onFinishDrawing={() => setDrawing(false)}
             onClear={() => {
+              setAreaNotice(null);
               setRing([]);
               setPlaces([]);
               setDrawing(false);

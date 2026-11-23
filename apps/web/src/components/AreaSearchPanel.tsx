@@ -6,6 +6,7 @@ import {
   PLACES_NOTE,
   PLACE_CATEGORIES,
   PLACE_CATEGORY_LABELS,
+  directionsUrl,
   ringAreaSqMiles,
   toCsv,
   type LonLat,
@@ -34,6 +35,8 @@ interface Results {
 export function AreaSearchPanel(props: {
   ring: LonLat[];
   drawing: boolean;
+  /** Shown at the top when the area came from an alert, or when that could not be done. */
+  notice?: { text: string; problem: boolean } | null;
   onStartDrawing: () => void;
   onFinishDrawing: () => void;
   onClear: () => void;
@@ -101,8 +104,12 @@ export function AreaSearchPanel(props: {
 
   return (
     <div>
+      {props.notice && <div className={props.notice.problem ? 'flash error' : 'flash notice'}>{props.notice.text}</div>}
       <section>
-        <p className="muted">Draw a shape on the map to list the businesses inside it, for example the path of a hail swath or a flooded neighborhood.</p>
+        <p className="muted">
+          Draw a shape on the map to list the businesses inside it, for example the path of a hail swath or a flooded neighborhood. Or click an alert on the map and
+          choose Find businesses in this area.
+        </p>
         <div className="row">
           {!drawing && (
             <button
@@ -189,13 +196,20 @@ export function AreaSearchPanel(props: {
             </button>
           )}
           {results.places.slice(0, 300).map((p) => (
-            <button key={p.id} type="button" className="place" onClick={() => props.onFocus(p.lon, p.lat)}>
-              <strong>{p.name}</strong>
-              <span className="small muted">
-                {p.kind || PLACE_CATEGORY_LABELS[p.category]}
-                {p.address ? ` · ${p.address}` : ''}
-              </span>
-            </button>
+            <div key={p.id} className="place-row">
+              <button type="button" className="place" onClick={() => props.onFocus(p.lon, p.lat)}>
+                <strong>{p.name}</strong>
+                <span className="small muted">
+                  {p.kind || PLACE_CATEGORY_LABELS[p.category]}
+                  {p.address ? ` · ${p.address}` : ''}
+                </span>
+              </button>
+              {directionsUrl(p.lat, p.lon) && (
+                <a className="small" href={directionsUrl(p.lat, p.lon)!} target="_blank" rel="noopener noreferrer" aria-label={`Directions to ${p.name}`}>
+                  Directions
+                </a>
+              )}
+            </div>
           ))}
           {results.places.length > 300 && <p className="small muted">Showing the first 300 here. The download has all {results.places.length.toLocaleString()}.</p>}
           <p className="small muted">
