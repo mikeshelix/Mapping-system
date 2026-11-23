@@ -154,7 +154,7 @@ All free. Endpoints, formats and field names were checked against the live servi
 | `spc` | SPC storm reports, `spc.noaa.gov/climo/reports/today_{torn,hail,wind}.csv` | 10 min | Each report | Point + 5 mi (configurable) |
 | `mesh` | MRMS radar hail, `mrms.ncep.noaa.gov/2D/MESH_Max_60min/` | 10 min | Hail swath per day, 1-degree tile and size band | 0.01-degree grid cells with hail of 0.75 in or more |
 | `nhc` | NHC `CurrentStorms.json` + NOAA tropical map service | 15 min | Forecast cone; each wind field band | Polygons (bands do not overlap) |
-| `wfigs` | NIFC WFIGS current perimeters (ArcGIS) | 30 min | Each wildfire (prescribed burns excluded) | Perimeter + 2 mi (configurable) |
+| `wfigs` | NIFC WFIGS current perimeters and incident locations (ArcGIS) | 30 min | Each wildfire (prescribed burns excluded). A fire with no mapped perimeter yet is a point; it becomes a shape when the perimeter is published | Perimeter + 2 mi, or reported point + 2 mi (configurable) |
 | `firms` | NASA FIRMS area API, VIIRS NOAA-20 and NOAA-21 | 15 min | Each detection | Point + 1.25 mi (configurable) |
 | `nwps` | NOAA river gauges map service | 15 min | Each gauge at action stage or in flood | Point + 2 mi (configurable) |
 | `usgs` | USGS earthquakes, `2.5_day.geojson` | 5 min | Each earthquake | Epicenter + radius by magnitude |
@@ -199,7 +199,7 @@ each with tests. Change the code and this table together.
 | SPC tornado report | EF rating | | | Unrated, EF0, EF1 | EF2 and stronger |
 | NHC forecast cone | Max sustained wind | under 34 kt (depression) | 34 to 63 kt (tropical storm) | 64 to 95 kt (hurricane) | 96 kt and over (major hurricane) |
 | NHC wind field | Wind radius | | 34 kt | 50 kt | 64 kt |
-| WFIGS wildfire | Size, then containment | 90%+ contained | under 100 acres | 100 to 4,999 acres | 5,000 acres and over |
+| WFIGS wildfire | Size, then containment | 90%+ contained; or no perimeter and under 10 acres or size not reported | under 100 acres | 100 to 4,999 acres | 5,000 acres and over |
 | NASA FIRMS | VIIRS confidence | low | nominal | high | never |
 | NOAA river gauge | Flood category | action stage | minor flooding | moderate flooding | major flooding |
 | USGS earthquake | Magnitude | under 4.0 | 4.0 to 4.9 | 5.0 to 5.9 | 6.0 and over |

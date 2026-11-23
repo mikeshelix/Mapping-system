@@ -18,7 +18,7 @@ import { saveExposureFactors, saveFeedSetting, saveSmsCaps, saveUsageLimits } fr
 
 const BUFFER_HELP: Partial<Record<SourceId, string>> = {
   spc: 'around each storm report',
-  wfigs: 'beyond each fire perimeter',
+  wfigs: 'beyond each fire perimeter or reported fire location',
   firms: 'around each satellite detection',
   nwps: 'around each river gauge in flood',
 };

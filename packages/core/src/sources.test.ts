@@ -14,6 +14,7 @@ import {
   parseRiverGauges,
   parseSpcReports,
   parseUsgsEarthquakes,
+  parseWfigsIncidents,
   parseWfigsPerimeters,
   renderHazardSms,
   normalizeUsPhone,
@@ -198,6 +199,32 @@ describe('other sources', () => {
       ['ABC', 'Ranger Road Fire', 'minor'],
       ['DEF', 'Pine Fire', 'extreme'],
     ]);
+  });
+
+  it('WFIGS points: one point per fire without a perimeter, small fires rated minor', () => {
+    const at = (lon: number, lat: number) => ({ type: 'Point', coordinates: [lon, lat] }) as never;
+    const events = parseWfigsIncidents(
+      [
+        { geometry: at(-123.6, 43.3), properties: { IrwinID: '{AAA}', IncidentName: 'Baby Bear', IncidentSize: 15, PercentContained: null, IncidentTypeCategory: 'WF', POOState: 'US-OR', POOCounty: 'Douglas', FireDiscoveryDateTime: 1775768400000 } },
+        { geometry: at(-90.5, 43.3), properties: { IrwinID: '{BBB}', IncidentName: 'Hwy Z', IncidentSize: 0.01, PercentContained: null, IncidentTypeCategory: 'WF', POOState: 'US-WI' } },
+        { geometry: at(-100, 40), properties: { IrwinID: '{CCC}', IncidentName: 'No Size', IncidentSize: null, IncidentTypeCategory: 'WF' } },
+        { geometry: at(-100, 41), properties: { IrwinID: '{DDD}', IncidentName: 'Big', IncidentSize: 6000, PercentContained: 5, IncidentTypeCategory: 'WF' } },
+        { geometry: at(-100, 42), properties: { IrwinID: '{HAS}', IncidentName: 'Mapped', IncidentSize: 900, IncidentTypeCategory: 'WF' } },
+        { geometry: at(-100, 43), properties: { IrwinID: '{RX1}', IncidentName: 'Burn', IncidentSize: 50, IncidentTypeCategory: 'RX' } },
+        { geometry: null, properties: { IrwinID: '{NOG}', IncidentName: 'Nowhere', IncidentTypeCategory: 'WF' } },
+      ],
+      new Set(['HAS']),
+    );
+    expect(events.map((e) => [e.key, e.eventName, e.severity])).toEqual([
+      ['AAA', 'Baby Bear Fire', 'moderate'],
+      ['BBB', 'Hwy Z Fire', 'minor'],
+      ['CCC', 'No Size Fire', 'minor'],
+      ['DDD', 'Big Fire', 'extreme'],
+    ]);
+    expect(events[0]).toMatchObject({ source: 'wfigs', hazardType: 'wildfire', point: { lon: -123.6, lat: 43.3 }, areaDesc: 'Douglas County, OR', startsAt: '2026-04-09T21:00:00.000Z' });
+    expect(events[0]!.headline).toBe('Baby Bear Fire: 15 acres, containment not reported. Reported location only; no mapped perimeter yet.');
+    expect(events[1]!.headline).toContain('under 0.1 acres');
+    expect(events[2]!.headline).toContain('size not reported');
   });
 
   it('FIRMS: reads columns by name', () => {
