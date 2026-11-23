@@ -7,7 +7,7 @@ config({ path: join(process.cwd(), '..', '..', '.env') });
 
 const nextConfig: NextConfig = {
   transpilePackages: ['@hazard/core', '@hazard/db'],
-  serverExternalPackages: ['postgres', 'exceljs', 'twilio'],
+  serverExternalPackages: ['postgres', 'exceljs', 'twilio', '@duckdb/node-api'],
   experimental: {
     serverActions: { bodySizeLimit: '25mb' },
   },

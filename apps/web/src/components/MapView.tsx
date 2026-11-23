@@ -21,6 +21,7 @@ import {
   type WeatherPatternId,
 } from '@hazard/core';
 import type { MapAction } from '@hazard/db';
+import { POI_MIN_ZOOM, directionsUrl, poiCategoryLabel, type Poi } from '@hazard/core';
 import { AreaSearchPanel } from './AreaSearchPanel';
 import { AssistantPanel } from './AssistantPanel';
 import { LocationCard, type LocationDetail } from './LocationCard';
@@ -127,6 +128,10 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
   const [drawing, setDrawing] = useState(false);
   const drawingRef = useRef(false);
   const [places, setPlaces] = useState<Place[]>([]);
+  // The browse-as-you-go businesses layer (Overture Maps).
+  const [poiOn, setPoiOn] = useState(false);
+  const [poiFilter, setPoiFilter] = useState('');
+  const [poiStatus, setPoiStatus] = useState<{ kind: 'zoom' | 'loading' | 'ok' | 'error'; text: string }>({ kind: 'zoom', text: '' });
   // Where the search area came from when it was taken from an alert, or why that failed.
   const [areaNotice, setAreaNotice] = useState<{ text: string; problem: boolean } | null>(null);
   // Changing this remounts the business panel, clearing an earlier result list.
@@ -310,6 +315,43 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
         paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 8, 2.5, 15, 6], 'circle-color': '#0369a1', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1 },
       });
 
+      // Businesses in view (Overture Maps). Drawn under the organization's own pins.
+      map.addSource('poi', { type: 'geojson', data: EMPTY, attribution: '© Overture Maps Foundation' });
+      map.addLayer(
+        {
+          id: 'poi-dot',
+          type: 'circle',
+          source: 'poi',
+          minzoom: POI_MIN_ZOOM,
+          paint: { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 13, 3.5, 17, 7], 'circle-color': '#0f766e', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.5 },
+        },
+        map.getLayer('cluster') ? 'cluster' : undefined,
+      );
+      map.on('click', 'poi-dot', (e) => {
+        if (drawingRef.current) return;
+        // Locations and found-in-area businesses sit on top and take the click.
+        if (map.queryRenderedFeatures(e.point, { layers: ['property-dot', 'cluster', 'place-dot'] }).length) return;
+        const f = e.features?.[0];
+        if (!f) return;
+        const p = f.properties as Record<string, string>;
+        const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+        const directions = directionsUrl(lat, lon);
+        const links = [
+          /^https?:\/\//i.test(p.website ?? '') ? `<a href="${escapeHtml(p.website!)}" target="_blank" rel="noreferrer noopener">Website</a>` : '',
+          directions ? `<a href="${directions}" target="_blank" rel="noreferrer noopener">Directions</a>` : '',
+        ].filter(Boolean);
+        new maplibregl.Popup({ maxWidth: '300px' })
+          .setLngLat([lon, lat])
+          .setHTML(
+            `<strong>${escapeHtml(p.name ?? '')}</strong><div style="color:#6b7280">${escapeHtml(poiCategoryLabel(p.category ?? ''))}</div>` +
+              (p.address ? `<div>${escapeHtml(p.address)}</div>` : '') +
+              (p.phone ? `<div>${escapeHtml(p.phone)}</div>` : '') +
+              (links.length ? `<div style="margin-top:4px">${links.join(' · ')}</div>` : '') +
+              `<div style="color:#6b7280;font-size:11px;margin-top:4px">Business data: Overture Maps</div>`,
+          )
+          .addTo(map);
+      });
+
       // While drawing, every click adds a corner and nothing else reacts to it.
       map.on('click', (e) => {
         if (!drawingRef.current) return;
@@ -360,7 +402,7 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
       map.on('click', 'hazard-fill', (e) => {
         if (drawingRef.current) return;
         // Locations, bubbles and businesses take priority over the weather underneath.
-        if (map.queryRenderedFeatures(e.point, { layers: ['property-dot', 'cluster', 'place-dot'] }).length) return;
+        if (map.queryRenderedFeatures(e.point, { layers: ['property-dot', 'cluster', 'place-dot', 'poi-dot'] }).length) return;
         const props = e.features?.[0]?.properties as Record<string, string> | undefined;
         if (!props?.id) return;
         const own = dataRef.current?.events.find((ev) => ev.id === props.id);
@@ -383,7 +425,7 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
           void findInAlertRef.current(props.id!, props.name ?? 'this alert');
         });
       });
-      for (const layer of ['property-dot', 'cluster', 'hazard-fill', 'place-dot']) {
+      for (const layer of ['property-dot', 'cluster', 'hazard-fill', 'place-dot', 'poi-dot']) {
         map.on('mouseenter', layer, () => {
           if (!drawingRef.current) map.getCanvas().style.cursor = 'pointer';
         });
@@ -630,6 +672,75 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
     openLocation(p.id as string);
   };
 
+  // Businesses layer: load what is in view after the map stops moving, only when switched on and zoomed in.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map) return;
+    const source = map.getSource('poi') as maplibregl.GeoJSONSource;
+    if (!poiOn) {
+      source.setData(EMPTY);
+      return;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let request: AbortController | null = null;
+    let current = true;
+
+    const load = async () => {
+      request?.abort();
+      if (map.getZoom() < POI_MIN_ZOOM) {
+        source.setData(EMPTY);
+        setPoiStatus({ kind: 'zoom', text: 'Zoom in to street level to see businesses.' });
+        return;
+      }
+      const b = map.getBounds();
+      const view = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((n) => n.toFixed(5)).join(',');
+      const controller = new AbortController();
+      request = controller;
+      setPoiStatus({ kind: 'loading', text: 'Loading businesses…' });
+      try {
+        const res = await fetch(`/api/poi?view=${view}${poiFilter.trim() ? `&q=${encodeURIComponent(poiFilter.trim())}` : ''}`, { signal: controller.signal, cache: 'no-store' });
+        if (res.status === 401) {
+          window.location.href = '/login';
+          return;
+        }
+        const json = (await res.json().catch(() => ({}))) as { places?: Poi[]; truncated?: boolean; error?: string };
+        if (!current || controller.signal.aborted) return;
+        if (!res.ok || !json.places) {
+          setPoiStatus({ kind: 'error', text: json.error ?? 'Businesses could not be loaded just now.' });
+          return;
+        }
+        source.setData({
+          type: 'FeatureCollection',
+          features: json.places.map((p) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [p.lon, p.lat] }, properties: { ...p } })),
+        });
+        const n = json.places.length;
+        setPoiStatus({
+          kind: 'ok',
+          text:
+            n === 0
+              ? poiFilter.trim() ? 'No businesses in view match that.' : 'No businesses found in view.'
+              : `${n} business${n === 1 ? '' : 'es'} shown${json.truncated ? '. There are more here: zoom in or type a filter.' : '.'}`,
+        });
+      } catch (error) {
+        // A newer request replaced this one; that is not a failure.
+        if ((error as Error).name === 'AbortError' || !current) return;
+        setPoiStatus({ kind: 'error', text: 'Businesses could not be loaded. Check your connection.' });
+      }
+    };
+    const schedule = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => void load(), 400);
+    };
+    map.on('moveend', schedule);
+    schedule();
+    return () => {
+      current = false;
+      clearTimeout(timer);
+      request?.abort();
+      map.off('moveend', schedule);
+    };
+  }, [poiOn, poiFilter, ready]);
+
   const closeDrawer = () => {
     setDrawer(null);
     if (drawing) setDrawing(false);
@@ -789,6 +900,33 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
                   {t} <span className="muted">({n})</span>
                 </label>
               ))}
+            </>
+          )}
+        </section>
+
+        <section>
+          <div className="section-head">
+            <h2>Businesses</h2>
+          </div>
+          <label className="check">
+            <input type="checkbox" checked={poiOn} onChange={(e) => setPoiOn(e.target.checked)} /> Show businesses on the map
+          </label>
+          {poiOn && (
+            <>
+              <input
+                type="search"
+                value={poiFilter}
+                onChange={(e) => setPoiFilter(e.target.value)}
+                maxLength={60}
+                placeholder="Filter by name or type, e.g. roofing"
+                aria-label="Filter businesses by name or type"
+                style={{ marginTop: 6 }}
+              />
+              <p className={`small poi-status ${poiStatus.kind}`} role="status">
+                {poiStatus.kind === 'loading' && <span className="spinner" aria-hidden="true" />}
+                {poiStatus.text}
+              </p>
+              <p className="small muted">Click a teal dot for details. The first look at a new area can take about 10 seconds. Business data: Overture Maps.</p>
             </>
           )}
         </section>
