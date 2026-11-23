@@ -174,6 +174,22 @@ describe('polygon handling', () => {
     expect(await impactNames(event!.id)).toEqual(['2 km outside', 'Inside']);
   });
 
+  it('a reported fire point becomes the same event when its perimeter arrives', async () => {
+    await addProperty('Near the report', -110.01, 40.0);
+    await addProperty('Inside the perimeter', -109.7, 40.05);
+    const base = { source: 'wfigs' as const, key: 'F2', hazardType: 'wildfire' as const, endsAt: null };
+    expect(await upsertSourceEvent(sql, pointEvent({ ...base, point: { lon: -110, lat: 40 } }), { bufferMeters: 3200 })).toBe('create');
+    const [asPoint] = await eventRow('wfigs', 'F2');
+    await matchEvent(sql, asPoint!.id);
+    expect(await impactNames(asPoint!.id)).toEqual(['Near the report']);
+    const withPerimeter = pointEvent({ ...base, point: undefined, geometry: square(-110.05, 39.95, 0.4), headline: 'Perimeter mapped' });
+    expect(await upsertSourceEvent(sql, withPerimeter, { bufferMeters: 3200 })).toBe('update');
+    const rows = await eventRow('wfigs', 'F2');
+    expect(rows.map((r) => r.id)).toEqual([asPoint!.id]);
+    await matchEvent(sql, asPoint!.id);
+    expect(await impactNames(asPoint!.id)).toEqual(['Inside the perimeter', 'Near the report']);
+  });
+
   it('accumulates a hail swath across polls', async () => {
     await addProperty('First cell', -96.995, 35.995);
     await addProperty('Second cell', -96.895, 35.995);

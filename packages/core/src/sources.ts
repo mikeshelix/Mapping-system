@@ -387,6 +387,55 @@ export function parseWfigsPerimeters(features: ArcFeature[]): SourceEvent[] {
   return events;
 }
 
+/** Below this size a fire with no mapped perimeter is rated minor, whatever its containment. */
+export const WFIGS_SMALL_FIRE_ACRES = 10;
+
+/**
+ * Reported wildfire locations (one point per fire) for fires that have no mapped perimeter yet.
+ * The key is the same fire id the perimeter layer uses, so when a perimeter is published the
+ * same event grows from a point into a shape instead of becoming a second event.
+ *   under 10 acres, or size not reported  minor
+ *   otherwise                             the perimeter scale (wildfireSeverity)
+ */
+export function parseWfigsIncidents(features: ArcFeature[], havePerimeter: ReadonlySet<string> = new Set()): SourceEvent[] {
+  const events: SourceEvent[] = [];
+  for (const f of features) {
+    const p = f.properties;
+    const id = (p.IrwinID ?? p.UniqueFireIdentifier) as string | null;
+    const coords = f.geometry?.type === 'Point' ? (f.geometry.coordinates as unknown as number[]) : null;
+    if (!id || !coords || p.IncidentTypeCategory !== 'WF') continue;
+    const [lon, lat] = coords;
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || Math.abs(lat!) > 90 || Math.abs(lon!) > 180) continue;
+    const key = id.replace(/[{}]/g, '');
+    if (havePerimeter.has(key)) continue;
+    const rawSize = p.IncidentSize == null ? NaN : Number(p.IncidentSize);
+    const acres = Number.isFinite(rawSize) ? rawSize : null;
+    const contained = p.PercentContained == null ? null : Number(p.PercentContained);
+    const name = String(p.IncidentName ?? 'Unnamed').trim() || 'Unnamed';
+    const size = acres === null ? 'size not reported' : acres < 0.1 ? 'under 0.1 acres' : `${acres < 10 ? Math.round(acres * 10) / 10 : Math.round(acres).toLocaleString('en-US')} acres`;
+    const containment = contained === null ? 'containment not reported' : `${contained}% contained`;
+    const state = (p.POOState as string | null)?.replace('US-', '') ?? null;
+    const county = typeof p.POOCounty === 'string' && p.POOCounty.trim() ? `${p.POOCounty.trim()} County` : null;
+    events.push({
+      source: 'wfigs',
+      key,
+      hazardType: 'wildfire',
+      eventName: `${name} Fire`,
+      severity: acres === null || acres < WFIGS_SMALL_FIRE_ACRES ? 'minor' : wildfireSeverity(acres, contained),
+      nativeSeverity: `${size}, ${containment}`,
+      headline: `${name} Fire: ${size}, ${containment}. Reported location only; no mapped perimeter yet.`,
+      areaDesc: [county, state].filter(Boolean).join(', ') || null,
+      point: { lon: lon!, lat: lat! },
+      startsAt: typeof p.FireDiscoveryDateTime === 'number' ? iso(p.FireDiscoveryDateTime) : null,
+      endsAt: null,
+      sourceUrl: 'https://data-nifc.opendata.arcgis.com/',
+      details: { acres, percentContained: contained, perimeter: false },
+      raw: p,
+    });
+  }
+  return events;
+}
+
 // ------------------------------------------------------------------ NASA FIRMS fire detections
 
 /**

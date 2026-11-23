@@ -11,6 +11,7 @@ import {
   parseRiverGauges,
   parseSpcReports,
   parseUsgsEarthquakes,
+  parseWfigsIncidents,
   parseWfigsPerimeters,
   FEMA_ACTIVE_DAYS,
   type FemaRow,
@@ -115,10 +116,18 @@ async function collectNhc(): Promise<Collected> {
 const WFIGS_LAYER =
   'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters_Current/FeatureServer/0';
 
-/** NIFC / WFIGS current wildfire perimeters. */
+// Same publisher, one point per reported fire. Verified against the live service on 2026-11-23:
+// it lists only fires that are not yet out, and its IrwinID matches the perimeter layer's poly_IRWINID.
+const WFIGS_POINTS_LAYER =
+  'https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Incident_Locations_Current/FeatureServer/0';
+
+/** NIFC / WFIGS current wildfires: mapped perimeters, plus a point for each fire that has no perimeter yet. */
 async function collectWfigs(): Promise<Collected> {
   const fields = 'poly_IRWINID,poly_IncidentName,poly_GISAcres,attr_IncidentName,attr_IncidentSize,attr_PercentContained,attr_IncidentTypeCategory,attr_FireDiscoveryDateTime,attr_POOState,attr_UniqueFireIdentifier';
-  return { events: parseWfigsPerimeters(await arcgisQuery(WFIGS_LAYER, "attr_IncidentTypeCategory='WF'", fields)), listsAllActive: true };
+  const perimeters = parseWfigsPerimeters(await arcgisQuery(WFIGS_LAYER, "attr_IncidentTypeCategory='WF'", fields));
+  const pointFields = 'IrwinID,UniqueFireIdentifier,IncidentName,IncidentSize,PercentContained,IncidentTypeCategory,FireDiscoveryDateTime,POOState,POOCounty';
+  const points = parseWfigsIncidents(await arcgisQuery(WFIGS_POINTS_LAYER, "IncidentTypeCategory='WF'", pointFields), new Set(perimeters.map((e) => e.key)));
+  return { events: [...perimeters, ...points], listsAllActive: true };
 }
 
 // The Suomi-NPP satellite stopped delivering data on 2026-11-02; NOAA-20 and NOAA-21 carry the same sensor.
