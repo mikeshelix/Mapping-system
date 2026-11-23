@@ -90,8 +90,8 @@ export function AreaSearchPanel(props: {
   function download() {
     if (!results) return;
     const csv = toCsv(
-      ['Name', 'Category', 'Type', 'Address', 'City', 'State', 'ZIP', 'Phone', 'Website', 'Latitude', 'Longitude', 'OpenStreetMap link'],
-      results.places.map((p) => [p.name, PLACE_CATEGORY_LABELS[p.category], p.kind, p.address, p.city, p.state, p.zip, p.phone, p.website, p.lat, p.lon, p.url]),
+      ['Name', 'Category', 'Type', 'Address', 'City', 'State', 'ZIP', 'Phone', 'Website', 'Latitude', 'Longitude'],
+      results.places.map((p) => [p.name, PLACE_CATEGORY_LABELS[p.category], p.kind, p.address, p.city, p.state, p.zip, p.phone, p.website, p.lat, p.lon]),
     );
     // The byte-order mark makes Excel read the file as UTF-8.
     const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
@@ -167,7 +167,7 @@ export function AreaSearchPanel(props: {
           <button type="button" style={{ marginTop: 8 }} onClick={() => void search()} disabled={!ready || busy}>
             {busy ? 'Searching…' : 'Find businesses'}
           </button>
-          {busy && <p className="small muted" style={{ marginTop: 8 }}>This uses a free public map-data service and can take up to a minute when it is busy.</p>}
+          {busy && <p className="small muted" style={{ marginTop: 8 }}>The first search of a region can take about 15 seconds; after that it is usually a few seconds.</p>}
         </section>
       )}
       {error && <div className="flash error">{error}</div>}
@@ -176,7 +176,7 @@ export function AreaSearchPanel(props: {
           <h2>
             {results.places.length.toLocaleString()} business{results.places.length === 1 ? '' : 'es'} found
           </h2>
-          {results.truncated && <p className="small" style={{ color: 'var(--danger)' }}>The list is incomplete because the area holds too many. Draw a smaller area for a full list.</p>}
+          {results.truncated && <p className="small" style={{ color: 'var(--danger)' }}>This area holds more businesses than one search returns. The list is the first {results.places.length.toLocaleString()} by name: pick a kind of business or draw a smaller area for the rest.</p>}
           <p className="small muted">
             {results.ownProperties.length === 0
               ? 'None of your properties are inside this area.'
@@ -201,7 +201,8 @@ export function AreaSearchPanel(props: {
                 <strong>{p.name}</strong>
                 <span className="small muted">
                   {p.kind || PLACE_CATEGORY_LABELS[p.category]}
-                  {p.address ? ` · ${p.address}` : ''}
+                  {p.address ? ` · ${[p.address, p.city].filter(Boolean).join(', ')}` : ''}
+                  {p.phone ? ` · ${p.phone}` : ''}
                 </span>
               </button>
               {directionsUrl(p.lat, p.lon) && (

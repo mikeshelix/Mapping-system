@@ -395,7 +395,8 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
             `<strong>${escapeHtml(p.name ?? '')}</strong><div style="color:#6b7280">${escapeHtml(p.kind ?? '')}</div>` +
               `<div>${escapeHtml([p.address, p.city, p.state, p.zip].filter(Boolean).join(', '))}</div>` +
               (p.phone ? `<div>${escapeHtml(p.phone)}</div>` : '') +
-              `<div style="margin-top:4px">${[link(p.website ?? '', 'Website'), link(p.url ?? '', 'OpenStreetMap')].filter(Boolean).join(' · ')}</div>`,
+              `<div style="margin-top:4px">${[link(p.website ?? '', 'Website'), link(directionsUrl(Number(p.lat), Number(p.lon)) ?? '', 'Directions')].filter(Boolean).join(' · ')}</div>` +
+              `<div style="color:#6b7280;font-size:11px;margin-top:4px">Business data: Overture Maps</div>`,
           )
           .addTo(map);
       });

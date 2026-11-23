@@ -9,6 +9,7 @@
  *   each item                                                            -> bbox and assets.aws.href (HTTPS GeoParquet)
  * The places schema no longer has "categories"; the category is "basic_category".
  */
+import { MAX_PLACES, NOT_A_BUSINESS_GROUPS, PLACE_CATEGORY_GROUPS, type LonLat, type Place, type PlaceCategory } from './places';
 
 export interface Poi {
   id: string;
@@ -76,6 +77,9 @@ export function placesFileFromItem(item: unknown): PlacesFile | null {
   return { bbox: bbox as [number, number, number, number], url };
 }
 
+/** Businesses Overture marks as permanently closed are never shown. */
+const NOT_CLOSED = "(operating_status IS NULL OR operating_status <> 'permanently_closed')";
+
 /** Reads "west,south,east,north". Returns why it cannot be used when it is not a sensible street-level view. */
 export function parseViewBox(input: string | null): { ok: true; box: ViewBox } | { ok: false; error: string } {
   const parts = (input ?? '').split(',').map((p) => Number(p));
@@ -118,7 +122,8 @@ FROM read_parquet([${list}])
 WHERE bbox.xmin BETWEEN ${n(box.west)} AND ${n(box.east)}
   AND bbox.ymin BETWEEN ${n(box.south)} AND ${n(box.north)}
   AND confidence > ${POI_MIN_CONFIDENCE}
-  AND names.primary IS NOT NULL${
+  AND names.primary IS NOT NULL
+  AND ${NOT_CLOSED}${
     withFilter
       ? `
   AND (names.primary ILIKE $1 ESCAPE '\\' OR replace(coalesce(basic_category, ''), '_', ' ') ILIKE $1 ESCAPE '\\')`
@@ -156,4 +161,70 @@ export function cleanPoiRow(row: Record<string, unknown>): Poi | null {
 export function poiCategoryLabel(category: string): string {
   const words = category.replace(/_/g, ' ').trim();
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Business';
+}
+
+// ------------------------------------------------------------------ businesses inside a shape
+
+/** The smallest box around a ring. */
+export function ringBounds(ring: LonLat[]): ViewBox {
+  const lons = ring.map((p) => p[0]);
+  const lats = ring.map((p) => p[1]);
+  return { west: Math.min(...lons), south: Math.min(...lats), east: Math.max(...lons), north: Math.max(...lats) };
+}
+
+/**
+ * The DuckDB query for every business inside a ring. Nothing typed by a person reaches the
+ * query text: the ring is formatted numbers, the category groups are fixed words from this
+ * codebase, and file addresses have been checked. One row more than the limit is asked for,
+ * so the caller can tell when the list is partial.
+ */
+export function buildAreaQuery(files: PlacesFile[], ring: LonLat[], category: PlaceCategory): string {
+  const n = (v: number) => v.toFixed(6);
+  const box = ringBounds(ring);
+  const closed = [...ring, ring[0]!].map(([lon, lat]) => `${n(lon)} ${n(lat)}`).join(', ');
+  const words = (list: readonly string[]) => list.filter((w) => /^[a-z_]+$/.test(w)).map((w) => `'${w}'`).join(', ');
+  const group =
+    category === 'all'
+      ? `(taxonomy.hierarchy[1] IS NULL OR taxonomy.hierarchy[1] NOT IN (${words(NOT_A_BUSINESS_GROUPS)}))`
+      : `taxonomy.hierarchy[1] IN (${words(PLACE_CATEGORY_GROUPS[category])})`;
+  return `
+SELECT id, names.primary AS name, basic_category AS kind, taxonomy.hierarchy[1] AS grp,
+       ST_X(geometry) AS lon, ST_Y(geometry) AS lat,
+       addresses[1].freeform AS address, addresses[1].locality AS city, addresses[1].region AS region, addresses[1].postcode AS postcode,
+       phones[1] AS phone, websites[1] AS website
+FROM read_parquet([${files.map((f) => `'${f.url}'`).join(', ')}])
+WHERE bbox.xmin BETWEEN ${n(box.west)} AND ${n(box.east)}
+  AND bbox.ymin BETWEEN ${n(box.south)} AND ${n(box.north)}
+  AND confidence > ${POI_MIN_CONFIDENCE}
+  AND names.primary IS NOT NULL
+  AND ${NOT_CLOSED}
+  AND ${group}
+  AND ST_Contains(ST_GeomFromText('POLYGON((${closed}))'), geometry)
+ORDER BY names.primary, id
+LIMIT ${MAX_PLACES + 1}`;
+}
+
+const GROUP_TO_CATEGORY = new Map<string, Exclude<PlaceCategory, 'all'>>(
+  (Object.entries(PLACE_CATEGORY_GROUPS) as Array<[Exclude<PlaceCategory, 'all'>, readonly string[]]>).flatMap(([category, groups]) => groups.map((g) => [g, category] as const)),
+);
+
+/** One area-query row as a business for the list and the download, or null when it has no name or position. */
+export function cleanAreaRow(row: Record<string, unknown>): Place | null {
+  const poi = cleanPoiRow({ ...row, category: row.kind, address: null, city: null, region: null, postcode: null });
+  if (!poi) return null;
+  return {
+    id: poi.id,
+    name: poi.name,
+    // Places Overture has not grouped are filed under services, the broadest group.
+    category: GROUP_TO_CATEGORY.get(text(row.grp, 60)) ?? 'services',
+    kind: poi.category ? poiCategoryLabel(poi.category) : '',
+    address: text(row.address, 160),
+    city: text(row.city, 80),
+    state: text(row.region, 40).replace(/^US-/, ''),
+    zip: text(row.postcode, 12),
+    phone: poi.phone,
+    website: poi.website,
+    lon: poi.lon,
+    lat: poi.lat,
+  };
 }

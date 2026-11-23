@@ -6,14 +6,11 @@ import {
   MAX_AREA_SQ_MILES,
   ZERO_USAGE,
   addUsage,
-  buildOverpassQuery,
   checkShape,
-  classifyPlace,
   cleanCommon,
   cleanInt,
   cleanUuid,
   estimateCostUsd,
-  parseOverpass,
   readAreaSearchCap,
   readAssistantCap,
   ringAreaSqMiles,
@@ -135,71 +132,6 @@ describe('drawn areas', () => {
     const big = checkShape([[0, 0], [1, 0], [1, 1], [0, 1]]);
     expect(big.ok).toBe(false);
     expect(!big.ok && big.error).toContain(String(MAX_AREA_SQ_MILES));
-  });
-});
-
-describe('business query', () => {
-  it('puts the shape in latitude-longitude order and asks only for named features', () => {
-    const q = buildOverpassQuery(SQUARE, 'food');
-    expect(q).toContain('(poly:"47.210000 -123.110000 47.210000 -123.088700 47.224500 -123.088700 47.224500 -123.110000")');
-    expect(q.startsWith('[out:json][timeout:25];')).toBe(true);
-    expect(q).toContain('nwr["name"]["amenity"~"^(restaurant|cafe|fast_food|bar|pub|food_court|ice_cream|biergarten)$"]');
-    expect(q).not.toContain('["shop"]');
-    expect(q).toMatch(/out center tags \d+;$/);
-  });
-
-  it('covers every category when searching everything', () => {
-    const q = buildOverpassQuery(SQUARE, 'all');
-    for (const key of ['["shop"]', '["office"]', '["craft"]', '["healthcare"]', '"tourism"', '"leisure"', 'fuel']) expect(q).toContain(key);
-  });
-});
-
-describe('business results', () => {
-  const reply = {
-    elements: [
-      { type: 'node', id: 1, lat: 47.214, lon: -123.1, tags: { name: 'DQ Grill & Chill', amenity: 'fast_food', 'addr:housenumber': '223', 'addr:street': 'North 1st Street', 'addr:city': 'Shelton', 'addr:state': 'WA', 'addr:postcode': '98584-3548', phone: '+1-360-426-7277', website: 'https://www.dairyqueen.com/x' } },
-      { type: 'way', id: 2, center: { lat: 47.215, lon: -123.101 }, tags: { name: 'Ace Hardware', shop: 'hardware', website: 'acehardware.com' } },
-      { type: 'node', id: 3, lat: 47.215, lon: -123.109, tags: { amenity: 'parking' } },
-      { type: 'node', id: 4, lat: 47.215, lon: -123.109, tags: { name: 'City Park', leisure: 'park' } },
-      { type: 'node', id: 5, lat: 47.215, lon: -123.109, tags: { name: 'First Church', amenity: 'place_of_worship' } },
-      { type: 'node', id: 6, tags: { name: 'No Position Cafe', amenity: 'cafe' } },
-      { type: 'node', id: 7, lat: 47.2, lon: -123.1, tags: { name: 'Bad Link Tyres', shop: 'tyres', website: 'javascript:alert(1)' } },
-      { type: 'node', id: 1, lat: 47.214, lon: -123.1, tags: { name: 'DQ Grill & Chill', amenity: 'fast_food' } },
-    ],
-  };
-
-  it('keeps named, placed businesses and reads their details', () => {
-    const places = parseOverpass(reply);
-    expect(places.map((p) => p.name)).toEqual(['Ace Hardware', 'Bad Link Tyres', 'DQ Grill & Chill']);
-    const dq = places[2]!;
-    expect(dq).toMatchObject({ id: 'node/1', category: 'food', kind: 'fast food', address: '223 North 1st Street', city: 'Shelton', state: 'WA', zip: '98584-3548', lat: 47.214, lon: -123.1, url: 'https://www.openstreetmap.org/node/1' });
-    // A way is placed at its center; a bare domain gets a scheme.
-    expect(places[0]).toMatchObject({ id: 'way/2', category: 'retail', lat: 47.215, website: 'https://acehardware.com/' });
-  });
-
-  it('never passes on a link that is not http or https', () => {
-    expect(parseOverpass(reply).find((p) => p.name === 'Bad Link Tyres')!.website).toBe('');
-  });
-
-  it('filters to one category', () => {
-    expect(parseOverpass(reply, 'automotive').map((p) => p.name)).toEqual(['Bad Link Tyres']);
-  });
-
-  it('rejects a reply that is not in the expected form', () => {
-    expect(() => parseOverpass({ error: 'rate limited' })).toThrow();
-  });
-
-  it('classifies by what a place is', () => {
-    expect(classifyPlace({ shop: 'supermarket' })).toBe('retail');
-    expect(classifyPlace({ shop: 'car_repair' })).toBe('automotive');
-    expect(classifyPlace({ amenity: 'pharmacy' })).toBe('health');
-    expect(classifyPlace({ amenity: 'bank' })).toBe('office');
-    expect(classifyPlace({ office: 'insurance' })).toBe('office');
-    expect(classifyPlace({ craft: 'roofer' })).toBe('trades');
-    expect(classifyPlace({ tourism: 'hotel' })).toBe('lodging');
-    expect(classifyPlace({ tourism: 'viewpoint' })).toBeNull();
-    expect(classifyPlace({ amenity: 'school' })).toBeNull();
-    expect(classifyPlace({ shop: 'vacant' })).toBeNull();
   });
 });
 

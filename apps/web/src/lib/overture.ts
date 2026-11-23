@@ -9,15 +9,22 @@
  */
 import type { DuckDBConnection } from '@duckdb/node-api';
 import {
+  MAX_PLACES,
   OVERTURE_CATALOG_URL,
   POI_LIMIT,
+  buildAreaQuery,
   buildPoiQuery,
+  cleanAreaRow,
   cleanPoiRow,
   filesForView,
   latestPlacesCollection,
   placesFileFromItem,
   placesItemUrls,
   poiFilterPattern,
+  ringBounds,
+  type LonLat,
+  type Place,
+  type PlaceCategory,
   type PlacesFile,
   type Poi,
   type ViewBox,
@@ -50,6 +57,7 @@ const RELEASE_TTL_MS = 6 * 3_600_000;
 const RESULT_TTL_MS = 3_600_000;
 const MAX_RESULTS_CACHED = 500;
 const QUERY_TIMEOUT_MS = 45_000;
+const AREA_TIMEOUT_MS = 90_000;
 
 async function connect(): Promise<DuckDBConnection> {
   const s = state();
@@ -105,6 +113,42 @@ async function currentRelease(): Promise<Release> {
   }
 }
 
+/** Runs one query on the shared connection, after any already waiting, and gives up waiting after timeoutMs. */
+async function runQuery(sql: string, params: string[], timeoutMs: number): Promise<Array<Record<string, unknown>>> {
+  const s = state();
+  const run = async () => {
+    const connection = await connect();
+    const reader = params.length ? await connection.runAndReadAll(sql, params) : await connection.runAndReadAll(sql);
+    return reader.getRowObjects() as Array<Record<string, unknown>>;
+  };
+  const queued = s.queue.then(run, run);
+  s.queue = queued.catch(() => undefined);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    queued,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Overture query timed out')), timeoutMs);
+    }),
+  ]).finally(() => clearTimeout(timer));
+}
+
+export interface AreaResult {
+  release: string;
+  places: Place[];
+  /** True when the area holds more businesses than one search returns. */
+  truncated: boolean;
+}
+
+/** Every business inside a ring, by name. Used by "Find businesses in an area" and the alert button. */
+export async function findPlacesInArea(ring: LonLat[], category: PlaceCategory): Promise<AreaResult> {
+  const release = await currentRelease();
+  const files = filesForView(release.files, ringBounds(ring));
+  if (files.length === 0) return { release: release.release, places: [], truncated: false };
+  const rows = await runQuery(buildAreaQuery(files, ring, category), [], AREA_TIMEOUT_MS);
+  const places = rows.map(cleanAreaRow).filter((p): p is Place => p !== null);
+  return { release: release.release, places: places.slice(0, MAX_PLACES), truncated: rows.length > MAX_PLACES };
+}
+
 export async function findPois(box: ViewBox, filter: string | null): Promise<PoiResult> {
   const s = state();
   const release = await currentRelease();
@@ -117,24 +161,9 @@ export async function findPois(box: ViewBox, filter: string | null): Promise<Poi
   if (files.length === 0) return { release: release.release, places: [], truncated: false };
   const sql = buildPoiQuery(files, box, filter !== null);
 
-  const run = async (): Promise<PoiResult> => {
-    const connection = await connect();
-    const reader = filter !== null ? await connection.runAndReadAll(sql, [poiFilterPattern(filter)]) : await connection.runAndReadAll(sql);
-    const places = reader
-      .getRowObjects()
-      .map((row) => cleanPoiRow(row as Record<string, unknown>))
-      .filter((p): p is Poi => p !== null);
-    return { release: release.release, places, truncated: places.length >= POI_LIMIT };
-  };
-  const queued = s.queue.then(run, run);
-  s.queue = queued.catch(() => undefined);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const value = await Promise.race([
-    queued,
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error('Overture query timed out')), QUERY_TIMEOUT_MS);
-    }),
-  ]).finally(() => clearTimeout(timer));
+  const rows = await runQuery(sql, filter !== null ? [poiFilterPattern(filter)] : [], QUERY_TIMEOUT_MS);
+  const places = rows.map(cleanPoiRow).filter((p): p is Poi => p !== null);
+  const value: PoiResult = { release: release.release, places, truncated: places.length >= POI_LIMIT };
 
   if (s.results.size >= MAX_RESULTS_CACHED) s.results.delete(s.results.keys().next().value as string);
   s.results.set(cacheKey, { at: Date.now(), value });

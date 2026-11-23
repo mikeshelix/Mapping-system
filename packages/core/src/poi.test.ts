@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { MAX_PLACES, PLACE_CATEGORIES, PLACE_CATEGORY_GROUPS, PLACE_CATEGORY_LABELS, type LonLat } from './places';
 import {
+  buildAreaQuery,
   buildPoiQuery,
+  cleanAreaRow,
   cleanPoiFilter,
   cleanPoiRow,
   filesForView,
@@ -10,6 +13,7 @@ import {
   placesItemUrls,
   poiCategoryLabel,
   poiFilterPattern,
+  ringBounds,
   type PlacesFile,
 } from './poi';
 
@@ -124,5 +128,52 @@ describe('rows', () => {
   it('labels categories in plain words', () => {
     expect(poiCategoryLabel('gas_station')).toBe('Gas station');
     expect(poiCategoryLabel('')).toBe('Business');
+  });
+});
+
+describe('businesses inside a shape', () => {
+  const ring: LonLat[] = [[-95.4, 29.74], [-95.35, 29.74], [-95.35, 29.78]];
+
+  it('bounds the ring', () => {
+    expect(ringBounds(ring)).toEqual({ west: -95.4, south: 29.74, east: -95.35, north: 29.78 });
+  });
+
+  it('searches the closed outline, narrowed first by its bounding box', () => {
+    const sql = buildAreaQuery([file([-100, 20, -90, 40])], ring, 'all');
+    expect(sql).toContain("ST_Contains(ST_GeomFromText('POLYGON((-95.400000 29.740000, -95.350000 29.740000, -95.350000 29.780000, -95.400000 29.740000))'), geometry)");
+    expect(sql).toContain('bbox.xmin BETWEEN -95.400000 AND -95.350000');
+    expect(sql).toContain('bbox.ymin BETWEEN 29.740000 AND 29.780000');
+    expect(sql).toContain('confidence > 0.7');
+    expect(sql).toContain("operating_status <> 'permanently_closed'");
+    expect(sql).toMatch(new RegExp(`LIMIT ${MAX_PLACES + 1}$`));
+    expect(sql).not.toContain('$1');
+  });
+
+  it('leaves out lakes and bridges from "all", and narrows to one category by Overture group', () => {
+    expect(buildAreaQuery([file([0, 0, 1, 1])], ring, 'all')).toContain("(taxonomy.hierarchy[1] IS NULL OR taxonomy.hierarchy[1] NOT IN ('geographic_entities'))");
+    expect(buildAreaQuery([file([0, 0, 1, 1])], ring, 'food')).toContain("taxonomy.hierarchy[1] IN ('food_and_drink')");
+    expect(buildAreaQuery([file([0, 0, 1, 1])], ring, 'recreation')).toContain("taxonomy.hierarchy[1] IN ('sports_and_recreation', 'arts_and_entertainment')");
+  });
+
+  it('has a label and a group list for every category, with no group in two categories', () => {
+    for (const c of PLACE_CATEGORIES) expect(PLACE_CATEGORY_LABELS[c]).toBeTruthy();
+    const groups = Object.values(PLACE_CATEGORY_GROUPS).flat();
+    expect(new Set(groups).size).toBe(groups.length);
+    expect(Object.keys(PLACE_CATEGORY_GROUPS).sort()).toEqual(PLACE_CATEGORIES.filter((c) => c !== 'all').sort());
+  });
+
+  it('turns a row into a list entry with address parts kept separate for the download', () => {
+    const row = {
+      id: 'abc', name: 'Kangaroo Express', kind: 'convenience_store', grp: 'shopping', lon: -80.74, lat: 28.38,
+      address: '7175 N Hwy 1', city: 'Cocoa', region: 'US-FL', postcode: '32927', phone: '+13217354351', website: 'https://www.circlek.com/',
+    };
+    expect(cleanAreaRow(row)).toEqual({
+      id: 'abc', name: 'Kangaroo Express', category: 'retail', kind: 'Convenience store', address: '7175 N Hwy 1', city: 'Cocoa', state: 'FL', zip: '32927',
+      phone: '+13217354351', website: 'https://www.circlek.com/', lon: -80.74, lat: 28.38,
+    });
+    expect(cleanAreaRow({ ...row, grp: null, kind: null })).toMatchObject({ category: 'services', kind: '' });
+    expect(cleanAreaRow({ ...row, grp: 'education' })!.category).toBe('community');
+    expect(cleanAreaRow({ ...row, website: 'javascript:alert(1)' })!.website).toBe('');
+    expect(cleanAreaRow({ ...row, name: null })).toBeNull();
   });
 });
