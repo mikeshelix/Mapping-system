@@ -4,7 +4,9 @@ import type { SourceEvent } from '@hazard/core';
 import { createClient, type Sql } from './client';
 import { evaluatePendingEvents, matchEvent, upsertZone } from './engine';
 import { migrate } from './migrate';
+import { alertSearchArea } from './assistant';
 import { expireEnded, expireMissingKeys, upsertSourceEvent } from './sources';
+import { getForecastGrids, loadForecastWork, queueForecastHeadsUps, saveForecastGrid } from './forecast';
 
 const TEST_URL = (process.env.TEST_DATABASE_URL ?? 'postgres://hazard:hazard_dev@localhost:5433/hazard_test').replace(/hazard_test$/, 'hazard_test2');
 const OPTS = { appBaseUrl: 'https://app.example.test' };
@@ -190,6 +192,27 @@ describe('polygon handling', () => {
     expect(await impactNames(asPoint!.id)).toEqual(['Inside the perimeter', 'Near the report']);
   });
 
+  it('turns the part of an alert on screen into one outline for the business search', async () => {
+    // A square about 0.1 degrees across (roughly 6 by 7 miles).
+    await upsertSourceEvent(sql, pointEvent({ source: 'wfigs', key: 'AREA1', hazardType: 'wildfire', eventName: 'Area Fire', point: undefined, geometry: square(-105, 40, 0.1), endsAt: null }), { bufferMeters: 0 });
+    const [event] = await eventRow('wfigs', 'AREA1');
+    const whole = await alertSearchArea(sql, event!.id, { west: -106, south: 39, east: -104, north: 41 });
+    expect(whole).toMatchObject({ name: 'Area Fire', pieces: 1 });
+    expect(whole!.ring!.length).toBeGreaterThanOrEqual(4);
+    expect(whole!.ring!.length).toBeLessThanOrEqual(200);
+    expect(whole!.ring![0]).not.toEqual(whole!.ring!.at(-1));
+    expect(whole!.areaSqMiles).toBeGreaterThan(30);
+    expect(whole!.areaSqMiles).toBeLessThan(45);
+    // Only the western half of the square is in view.
+    const half = await alertSearchArea(sql, event!.id, { west: -106, south: 39, east: -104.95, north: 41 });
+    expect(half!.areaSqMiles).toBeGreaterThan(whole!.areaSqMiles * 0.45);
+    expect(half!.areaSqMiles).toBeLessThan(whole!.areaSqMiles * 0.55);
+    for (const [lon] of half!.ring!) expect(lon).toBeLessThanOrEqual(-104.95);
+    // Looking somewhere else entirely, and an alert that does not exist.
+    expect(await alertSearchArea(sql, event!.id, { west: -90, south: 30, east: -89, north: 31 })).toMatchObject({ ring: null, pieces: 0 });
+    expect(await alertSearchArea(sql, '00000000-0000-4000-8000-000000000000', { west: -106, south: 39, east: -104, north: 41 })).toBeNull();
+  });
+
   it('accumulates a hail swath across polls', async () => {
     await addProperty('First cell', -96.995, 35.995);
     await addProperty('Second cell', -96.895, 35.995);
@@ -332,5 +355,70 @@ describe('rule preview against stored events', () => {
     await upsertSourceEvent(sql, pointEvent(), { bufferMeters: 8000 });
     expect((await previewRule(sql, draft({ scope: 'zips', zipCodes: ['67748'] }))).eventsMatched).toBe(1);
     expect((await previewRule(sql, draft({ scope: 'zips', zipCodes: ['99999'] }))).eventsMatched).toBe(0);
+  });
+});
+
+describe('forecast heads-ups', () => {
+  const storms = (day: string, name: string) => ({ day, name, shortForecast: 'Showers And Thunderstorms', concerns: ['Thunderstorms'] });
+
+  it('does nothing until a rule asks for heads-ups', async () => {
+    await addProperty('Depot', -97, 35);
+    expect(await loadForecastWork(sql)).toEqual({ rules: [], properties: [] });
+  });
+
+  it('emails each contact once per location, day and kind of weather', async () => {
+    const depot = await addProperty('Depot', -97, 35);
+    const yard = await addProperty('Yard', -98, 36);
+    await sql`UPDATE alert_rules SET forecast_heads_up = true`;
+    const work = await loadForecastWork(sql);
+    expect(work.rules).toHaveLength(1);
+    expect(work.properties.map((p) => p.name).sort()).toEqual(['Depot', 'Yard']);
+    expect(work.properties.find((p) => p.name === 'Depot')).toMatchObject({ lon: -97, lat: 35, clientName: 'Acme' });
+
+    // Wednesday day and night both flag thunderstorms at the depot: one item, one email.
+    const first = new Map([[depot, [storms('2026-11-25', 'Wednesday'), storms('2026-11-25', 'Wednesday Night')]]]);
+    expect(await queueForecastHeadsUps(sql, work, first, OPTS)).toBe(1);
+    let rows = await sql`SELECT kind, channel, status, recipient, subject, body_text, hazard_event_id FROM notifications ORDER BY created_at`;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: 'forecast', channel: 'email', status: 'queued', recipient: 'pat@example.test', hazard_event_id: null });
+    expect(rows[0]!.subject).toBe('Weather heads-up: thunderstorms forecast at Depot');
+    expect(rows[0]!.body_text).toContain('Wednesday Night: Showers And Thunderstorms');
+    expect(rows[0]!.body_text).toContain('not a warning');
+
+    // The same forecast on the next check sends nothing.
+    expect(await queueForecastHeadsUps(sql, work, first, OPTS)).toBe(0);
+
+    // Later the yard is flagged too, and the depot gains snow: one email with only what is new.
+    const second = new Map([
+      [depot, [{ day: '2026-11-25', name: 'Wednesday', shortForecast: 'Storms then Snow', concerns: ['Thunderstorms', 'Snow'] }]],
+      [yard, [storms('2026-11-26', 'Thursday')]],
+    ]);
+    expect(await queueForecastHeadsUps(sql, work, second, OPTS)).toBe(1);
+    rows = await sql`SELECT subject, body_text FROM notifications ORDER BY created_at`;
+    expect(rows).toHaveLength(2);
+    expect(rows[1]!.subject).toBe('Weather heads-up: snow and thunderstorms forecast at 2 locations');
+    expect(rows[1]!.body_text).toContain('Wednesday: Storms then Snow (snow)');
+    expect(rows[1]!.body_text).toContain('Thursday: Showers And Thunderstorms (thunderstorms)');
+    expect((await sql`SELECT count(*)::int AS n FROM forecast_heads_ups`)[0]!.n).toBe(3);
+  });
+
+  it('sends nothing to a contact without an email address, and nothing when the rule is switched off', async () => {
+    const depot = await addProperty('Depot', -97, 35);
+    await sql`UPDATE alert_rules SET forecast_heads_up = true`;
+    await sql`UPDATE contacts SET email = NULL`;
+    const flagged = new Map([[depot, [storms('2026-11-25', 'Wednesday')]]]);
+    expect(await queueForecastHeadsUps(sql, await loadForecastWork(sql), flagged, OPTS)).toBe(0);
+    await sql`UPDATE contacts SET email = 'pat@example.test'`;
+    await sql`UPDATE alert_rules SET enabled = false`;
+    expect((await loadForecastWork(sql)).properties).toEqual([]);
+  });
+
+  it('remembers which forecast grid a point is in, including points with none', async () => {
+    await saveForecastGrid(sql, '35.0000,-97.0000', 'https://api.weather.gov/gridpoints/OUN/97,94/forecast');
+    await saveForecastGrid(sql, '48.8566,2.3522', null);
+    const grids = await getForecastGrids(sql, ['35.0000,-97.0000', '48.8566,2.3522', '1.0000,1.0000']);
+    expect(grids.get('35.0000,-97.0000')).toBe('https://api.weather.gov/gridpoints/OUN/97,94/forecast');
+    expect(grids.get('48.8566,2.3522')).toBeNull();
+    expect(grids.has('1.0000,1.0000')).toBe(false);
   });
 });

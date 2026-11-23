@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ASSISTANT_QUESTION_MAX } from '@hazard/core';
+import type { PlaceSource } from '@hazard/core';
 import type { MapAction } from '@hazard/db';
 
 interface Turn {
@@ -10,10 +11,14 @@ interface Turn {
   /** Shown to administrators only. */
   costUsd?: number | null;
   mapTitle?: string;
+  /** Google Maps places the answer drew on. They must be listed directly under it. */
+  sources?: PlaceSource[];
   problem?: boolean;
 }
 interface Status {
   connected: boolean;
+  /** True when business lookups through Google Maps are switched on. */
+  places?: boolean;
   available: boolean;
   cap: number;
   remaining: number;
@@ -68,6 +73,7 @@ export function AssistantPanel({ onMap }: { onMap: (action: MapAction | null) =>
         answer?: string;
         status?: string;
         map?: MapAction | null;
+        sources?: PlaceSource[];
         remaining?: number;
         costUsd?: number | null;
       };
@@ -77,7 +83,7 @@ export function AssistantPanel({ onMap }: { onMap: (action: MapAction | null) =>
       }
       setTurns((prev) => [
         ...prev,
-        { role: 'assistant', text: json.answer!, costUsd: json.costUsd, mapTitle: json.map?.title, problem: json.status !== 'ok' },
+        { role: 'assistant', text: json.answer!, costUsd: json.costUsd, mapTitle: json.map?.title, sources: json.sources, problem: json.status !== 'ok' },
       ]);
       if (json.map) onMap(json.map);
       if (typeof json.remaining === 'number') setStatus((s) => (s ? { ...s, remaining: json.remaining!, available: s.available && json.remaining! > 0 } : s));
@@ -111,6 +117,26 @@ export function AssistantPanel({ onMap }: { onMap: (action: MapAction | null) =>
         {turns.map((t, i) => (
           <div key={i} className={`turn ${t.role}${t.problem ? ' problem' : ''}`}>
             {t.text}
+            {t.sources && t.sources.length > 0 && (
+              <div className="gmaps-sources">
+                <div>
+                  Sources from <span translate="no">Google Maps</span>
+                </div>
+                {t.sources.map((s) => (
+                  <a key={s.url} href={s.url} target="_blank" rel="noopener noreferrer" translate="no">
+                    {/* Google's rule: the words "Google Maps" never break across lines. */}
+                    {s.title.endsWith('Google Maps') ? (
+                      <>
+                        {s.title.slice(0, -'Google Maps'.length)}
+                        <span>Google Maps</span>
+                      </>
+                    ) : (
+                      s.title
+                    )}
+                  </a>
+                ))}
+              </div>
+            )}
             {t.mapTitle && <div className="small muted">Shown on the map: {t.mapTitle}</div>}
             {typeof t.costUsd === 'number' && <div className="small muted">Cost of this answer: ${t.costUsd.toFixed(4)}</div>}
           </div>
@@ -162,6 +188,7 @@ export function AssistantPanel({ onMap }: { onMap: (action: MapAction | null) =>
         {status?.connected ? `${status.remaining.toLocaleString()} of ${status.cap.toLocaleString()} questions left this month. ` : ''}
         Answers are written by an AI model from your portfolio data and can be wrong; check figures before acting on them. Questions and the
         portfolio details needed to answer them are sent to Anthropic.
+        {status?.places ? ' Questions about nearby businesses are also sent to Google Maps, with the location being searched.' : ''}
       </p>
     </div>
   );

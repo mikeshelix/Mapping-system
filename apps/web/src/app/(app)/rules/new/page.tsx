@@ -34,6 +34,7 @@ export default async function NewRulePage({ searchParams }: { searchParams: Sear
           recipientMode: 'linked',
           contactIds: [],
           sms: false,
+          forecastHeadsUp: false,
         }}
       />
     </div>

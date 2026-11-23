@@ -286,3 +286,29 @@ Twilio is a paid, usage-based service and US numbers must be registered (A2P 10D
   per question on `claude-opus-5-5`. It has not been measured on a portfolio of thousands of properties, where
   lookups return more text and cost more.
 - The public Overpass server took 30 to 35 seconds per search and refused some requests while this was built.
+
+## Google place search in the assistant (demo)
+
+Optional, and off unless `GOOGLE_MAPS_API_KEY` is set. With a key, the assistant gets one extra tool, `nearby_businesses`, which asks Google Maps Platform's Maps Experience agent tools (`POST https://mapstools.googleapis.com/v1:searchText`, verified 2026-11-23) for businesses near a portfolio location or a named town.
+
+- **Cost:** requests stay on the Essentials tier (five places, no extended details), which has 10,000 no-charge requests a month. `GOOGLE_PLACES_MONTHLY_CAP` (default 9,000, counted across all organizations in `place_lookups`) stops lookups before that allowance runs out.
+- **What is sent to Google:** the search words and, when a location is named, its coordinates. Nothing else about the portfolio.
+- **What is kept:** only the search words and a count. Google's results are shown to the person who asked and are not stored.
+- **Attribution:** every answer that used Google lists its Google Maps sources, with links, directly under the answer.
+- **Not on the map:** Google results are listed, not plotted, because the map is not a Google map.
+
+Before this is offered to customers, two things in Google's terms need a person to read them: the rule on showing Google content beside a non-Google map, and the rule that the AI model used must not train on or keep Google Maps content.
+
+## Forecasts and forecast heads-ups
+
+Each location card shows the next three days from the National Weather Service (`api.weather.gov/points/{lat},{lon}`, then the gridpoint forecast it names; verified 2026-11-23; free, no key, United States only). Periods that mention thunderstorms, snow, ice, heavy rain, tropical or other severe weather, or wind of 30 mph (gusts of 40 mph) or more are marked "Worth watching". That marking reads the forecaster's own words; it is a prompt to look closer, not a warning.
+
+A rule can also ask for **forecast heads-ups** (off by default). The worker then checks the forecast for every location the rule covers every three hours (`FORECAST_POLL_SECONDS`) and emails the rule's contacts when a location first shows flagged weather starting in the next 48 hours.
+
+- One email per contact per check, listing every new item across their locations.
+- A contact is told about the same kind of weather, at the same location, on the same day only once (`forecast_heads_ups`).
+- Email only. The rule's hazard types and minimum severity do not apply to heads-ups; its locations and recipients do.
+- Locations close together share one forecast request, and the grid a location falls in is looked up once and remembered (`forecast_grids`). When no rule asks for heads-ups, nothing is fetched.
+- Official watches and warnings are separate and still go out as alerts.
+
+Not yet measured: how long the first check takes for a portfolio of thousands of locations (new locations are looked up at most 2,000 per check).

@@ -25,6 +25,7 @@ export interface RuleFormValues {
   recipientMode: 'linked' | 'specific';
   contactIds: string[];
   sms: boolean;
+  forecastHeadsUp: boolean;
 }
 
 interface Props {
@@ -223,6 +224,14 @@ export function RuleBuilder({ initial, clients, contacts, properties, zips }: Pr
         <p className="small muted" style={{ margin: 0 }}>
           Each contact gets one message per hazard listing all of their affected properties, and a follow-up only if the
           severity rises. Hazards of unknown severity never notify.
+        </p>
+        <label className="check" style={{ marginTop: 10 }}>
+          <input type="checkbox" name="forecast_heads_up" defaultChecked={initial.forecastHeadsUp} /> Also email a forecast heads-up
+        </label>
+        <p className="small muted" style={{ margin: 0 }}>
+          Sends an email when the National Weather Service forecast for a covered location first shows thunderstorms, snow, ice, heavy rain, strong wind or
+          tropical weather in the next two days. This is separate from the hazards chosen above, goes by email only, and can mean several emails a day in stormy
+          seasons.
         </p>
       </div>
 

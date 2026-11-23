@@ -179,9 +179,9 @@ export async function matchEvent(sql: Sql, eventId: string): Promise<number> {
 
 // ------------------------------------------------------------------ rules -> notifications
 
-async function loadRules(sql: Sql, orgIds: string[]): Promise<RuleInput[]> {
+export async function loadRules(sql: Sql, orgIds: string[]): Promise<RuleInput[]> {
   const rows = await sql`
-    SELECT r.id, r.organization_id, r.enabled, r.hazard_types, r.min_severity, r.scope, r.recipient_mode, r.channels,
+    SELECT r.id, r.organization_id, r.enabled, r.hazard_types, r.min_severity, r.scope, r.recipient_mode, r.channels, r.forecast_heads_up,
       COALESCE((SELECT array_agg(client_id::text) FROM alert_rule_clients WHERE rule_id = r.id), '{}') AS client_ids,
       COALESCE((SELECT array_agg(property_id::text) FROM alert_rule_properties WHERE rule_id = r.id), '{}') AS property_ids,
       COALESCE((SELECT array_agg(contact_id::text) FROM alert_rule_contacts WHERE rule_id = r.id), '{}') AS contact_ids,
@@ -201,6 +201,7 @@ async function loadRules(sql: Sql, orgIds: string[]): Promise<RuleInput[]> {
     recipientMode: r.recipient_mode,
     contactIds: r.contact_ids,
     channels: r.channels,
+    forecastHeadsUp: r.forecast_heads_up,
   }));
 }
 

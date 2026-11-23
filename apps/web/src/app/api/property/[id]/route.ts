@@ -15,7 +15,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   const org = user.organizationId;
   const [p] = await sql`
     SELECT p.id, p.name, concat_ws(', ', p.address, p.city, p.state, p.zip) AS address, p.property_type, p.declared_value,
-      p.geocode_source, c.id AS client_id, c.name AS client, c.color
+      p.geocode_source, ST_X(p.location) AS lon, ST_Y(p.location) AS lat, c.id AS client_id, c.name AS client, c.color
     FROM properties p JOIN clients c ON c.id = p.client_id
     WHERE p.id = ${id} AND p.organization_id = ${org}`;
   if (!p) return NextResponse.json({ error: 'Not found' }, { status: 404 });
@@ -39,6 +39,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     address: p.address,
     propertyType: p.property_type,
     declaredValue: p.declared_value === null ? null : Number(p.declared_value),
+    lon: Number(p.lon),
+    lat: Number(p.lat),
     placedBy: p.geocode_source === 'manual' ? 'pin' : 'address',
     client: p.client,
     clientColor: p.color,

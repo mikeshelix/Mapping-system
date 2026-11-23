@@ -442,3 +442,81 @@ export async function recordAreaSearch(
     VALUES (${r.organizationId}, ${r.userId}, ST_SetSRID(ST_GeomFromGeoJSON(${JSON.stringify(r.polygon)}), 4326), ${r.category}, ${r.source},
       ${r.resultCount}, ${r.status}, ${r.error ? r.error.slice(0, 500) : null}, ${r.durationMs})`;
 }
+
+// ------------------------------------------------------------------ Google place lookups
+
+/** Where one of the organization's properties is, for a "what is near this location" lookup. */
+export async function propertyPoint(sql: Sql, organizationId: string, propertyId: string): Promise<{ name: string; lon: number; lat: number } | null> {
+  const [r] = await sql`
+    SELECT name, ST_X(location::geometry) AS lon, ST_Y(location::geometry) AS lat
+    FROM properties WHERE id = ${propertyId} AND organization_id = ${organizationId}`;
+  return r ? { name: r.name as string, lon: Number(r.lon), lat: Number(r.lat) } : null;
+}
+
+/** Place lookups made this calendar month (UTC) across every organization: the figure Google bills on. */
+export async function placeLookupsThisMonth(sql: Sql): Promise<number> {
+  const [r] = await sql`
+    SELECT count(*)::int AS n FROM place_lookups
+    WHERE created_at >= date_trunc('month', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'`;
+  return r!.n;
+}
+
+export async function recordPlaceLookup(
+  sql: Sql,
+  r: { organizationId: string; userId: string | null; query: string; resultCount: number; status: 'ok' | 'error'; error?: string | null; durationMs: number },
+): Promise<void> {
+  await sql`
+    INSERT INTO place_lookups (organization_id, user_id, query, result_count, status, error, duration_ms)
+    VALUES (${r.organizationId}, ${r.userId}, ${r.query.slice(0, 300)}, ${r.resultCount}, ${r.status}, ${r.error ? r.error.slice(0, 500) : null}, ${r.durationMs})`;
+}
+
+// ------------------------------------------------------------------ business search inside an alert
+
+export interface AlertSearchArea {
+  name: string;
+  /** Open ring of the largest piece of the alert inside the view, simplified to at most maxPoints corners. Null when none of it is in view. */
+  ring: Array<[number, number]> | null;
+  areaSqMiles: number;
+  /** Separate pieces of the alert inside the view. */
+  pieces: number;
+}
+
+const SQ_M_PER_SQ_MILE = 2_589_988.11;
+
+/**
+ * The part of an alert that lies inside a map view, as one simple outline that the
+ * business search can take. Alerts are public data, so this is not limited to one organization.
+ * Returns null when the alert does not exist.
+ */
+export async function alertSearchArea(
+  sql: Sql,
+  eventId: string,
+  view: { west: number; south: number; east: number; north: number },
+  maxPoints = 200,
+): Promise<AlertSearchArea | null> {
+  const [event] = await sql`SELECT event_name FROM hazard_events WHERE id = ${eventId}`;
+  if (!event) return null;
+  const rows = await sql`
+    WITH shape AS (
+      SELECT ST_MakeValid(COALESCE(e.geometry, (SELECT ST_Union(z.geometry) FROM geo_zones z WHERE z.code = ANY(e.zone_codes)))) AS geom
+      FROM hazard_events e WHERE e.id = ${eventId}
+    ),
+    pieces AS (
+      SELECT (ST_Dump(ST_CollectionExtract(ST_Intersection(geom, ST_MakeEnvelope(${view.west}, ${view.south}, ${view.east}, ${view.north}, 4326)), 3))).geom AS geom
+      FROM shape WHERE geom IS NOT NULL
+    ),
+    -- Holes are dropped: the search takes a single outline.
+    outlines AS (SELECT ST_MakePolygon(ST_ExteriorRing(geom)) AS geom, count(*) OVER () AS pieces FROM pieces WHERE NOT ST_IsEmpty(geom)),
+    biggest AS (SELECT geom, pieces FROM outlines ORDER BY ST_Area(geom::geography) DESC LIMIT 1)
+    SELECT b.pieces::int AS pieces, ST_Area(s.geom::geography) AS sq_m, ST_AsGeoJSON(ST_ExteriorRing(s.geom), 5) AS ring
+    FROM biggest b
+    CROSS JOIN unnest(ARRAY[0, 0.0002, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1]::float8[]) AS t(tolerance)
+    CROSS JOIN LATERAL (SELECT CASE WHEN t.tolerance = 0 THEN b.geom ELSE ST_SimplifyPreserveTopology(b.geom, t.tolerance) END AS geom) s
+    WHERE ST_NPoints(s.geom) <= ${maxPoints + 1} AND ST_NPoints(s.geom) >= 4
+    ORDER BY t.tolerance LIMIT 1`;
+  const row = rows[0];
+  if (!row) return { name: event.event_name as string, ring: null, areaSqMiles: 0, pieces: 0 };
+  const coords = (JSON.parse(row.ring as string) as { coordinates: Array<[number, number]> }).coordinates;
+  // GeoJSON repeats the first corner at the end; the search wants it once.
+  return { name: event.event_name as string, ring: coords.slice(0, -1), areaSqMiles: Number(row.sq_m) / SQ_M_PER_SQ_MILE, pieces: row.pieces as number };
+}

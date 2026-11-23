@@ -19,6 +19,7 @@ interface RuleDraft {
   recipientMode: RuleInput['recipientMode'];
   contactIds: string[];
   channels: Channel[];
+  forecastHeadsUp: boolean;
 }
 
 /** Read and validate the rule builder form. Returns an error message instead of a draft when invalid. */
@@ -45,6 +46,7 @@ function readDraft(form: FormData, requireName: boolean): RuleDraft | string {
     contactIds: recipientMode === 'specific' ? list(form, 'contact_id').filter(isUuid) : [],
     // Email is the default channel; SMS only when the rule explicitly asks for it.
     channels: form.get('channel_sms') === 'on' ? ['email', 'sms'] : ['email'],
+    forecastHeadsUp: form.get('forecast_heads_up') === 'on',
   };
   if (requireName && !name) return 'Give the rule a name.';
   if (!(NOTIFIABLE_SEVERITIES as readonly string[]).includes(minSeverity)) return 'Choose a minimum severity.';
@@ -101,7 +103,7 @@ export async function saveRule(form: FormData): Promise<void> {
       const updated = await tx`
         UPDATE alert_rules SET name = ${draft.name}, hazard_types = ${draft.hazardTypes}::text[],
           min_severity = ${draft.minSeverity}::severity, scope = ${draft.scope}, recipient_mode = ${draft.recipientMode},
-          channels = ${draft.channels}::text[]
+          channels = ${draft.channels}::text[], forecast_heads_up = ${draft.forecastHeadsUp}
         WHERE id = ${ruleId} AND organization_id = ${org} RETURNING id`;
       if (updated.length === 0) throw new Error('Rule not found');
       await tx`DELETE FROM alert_rule_clients WHERE rule_id = ${ruleId}`;
@@ -110,9 +112,9 @@ export async function saveRule(form: FormData): Promise<void> {
       await tx`DELETE FROM alert_rule_contacts WHERE rule_id = ${ruleId}`;
     } else {
       const [row] = await tx`
-        INSERT INTO alert_rules (organization_id, name, hazard_types, min_severity, scope, recipient_mode, channels, template)
+        INSERT INTO alert_rules (organization_id, name, hazard_types, min_severity, scope, recipient_mode, channels, template, forecast_heads_up)
         VALUES (${org}, ${draft.name}, ${draft.hazardTypes}::text[], ${draft.minSeverity}::severity, ${draft.scope},
-          ${draft.recipientMode}, ${draft.channels}::text[], ${draft.template})
+          ${draft.recipientMode}, ${draft.channels}::text[], ${draft.template}, ${draft.forecastHeadsUp})
         RETURNING id`;
       ruleId = row!.id as string;
     }

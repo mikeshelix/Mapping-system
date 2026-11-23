@@ -13,7 +13,7 @@ export default async function EditRulePage({ params, searchParams }: { params: P
   const { id } = await params;
   if (!isUuid(id)) notFound();
   const [rule] = await getSql()`
-    SELECT r.id, r.name, r.template, r.hazard_types, r.min_severity, r.scope, r.recipient_mode, r.channels,
+    SELECT r.id, r.name, r.template, r.hazard_types, r.min_severity, r.scope, r.recipient_mode, r.channels, r.forecast_heads_up,
       COALESCE((SELECT array_agg(client_id::text) FROM alert_rule_clients WHERE rule_id = r.id), '{}') AS client_ids,
       COALESCE((SELECT array_agg(property_id::text) FROM alert_rule_properties WHERE rule_id = r.id), '{}') AS property_ids,
       COALESCE((SELECT array_agg(contact_id::text) FROM alert_rule_contacts WHERE rule_id = r.id), '{}') AS contact_ids,
@@ -43,6 +43,7 @@ export default async function EditRulePage({ params, searchParams }: { params: P
           recipientMode: rule.recipient_mode,
           contactIds: rule.contact_ids,
           sms: (rule.channels as string[]).includes('sms'),
+          forecastHeadsUp: rule.forecast_heads_up,
         }}
       />
     </div>

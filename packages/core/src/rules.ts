@@ -17,6 +17,8 @@ export interface RuleInput {
   recipientMode: 'linked' | 'specific';
   contactIds: string[];
   channels: Channel[];
+  /** Also email a heads-up when the forecast for a covered location shows weather worth watching. */
+  forecastHeadsUp?: boolean;
 }
 
 export interface ImpactInput {
@@ -153,4 +155,74 @@ export function planNotifications(input: PlanInput): PlannedNotification[] {
   }
 
   return [...plans.values()].map(({ escalated, ...plan }) => ({ ...plan, isEscalation: escalated }));
+}
+
+// ------------------------------------------------------------------ forecast heads-ups
+
+/** One thing worth watching at one location on one day, e.g. thunderstorms on 2026-11-25. */
+export interface HeadsUpItem {
+  propertyId: string;
+  /** Local calendar day of the forecast period, YYYY-MM-DD. */
+  day: string;
+  concern: string;
+}
+
+export interface PlannedHeadsUp {
+  organizationId: string;
+  contactId: string;
+  /** The first rule that selected this contact, kept for the audit trail. */
+  ruleId: string;
+  items: HeadsUpItem[];
+}
+
+export function headsUpKey(contactId: string, item: HeadsUpItem): string {
+  return `${contactId}|${item.propertyId}|${item.concern}|${item.day}`;
+}
+
+/**
+ * Work out which forecast heads-ups to send.
+ *
+ * Guarantees:
+ *  - only rules that are enabled and ask for forecast heads-ups count; their hazard type and severity settings do not apply
+ *  - email only, and only to contacts with an email address
+ *  - one message per contact, listing every new item across their locations
+ *  - an item already sent to a contact is never sent to them again
+ */
+export function planForecastHeadsUps(input: {
+  rules: RuleInput[];
+  /** Locations with flagged weather, and what was flagged. */
+  flagged: Array<ImpactInput & { items: Array<{ day: string; concern: string }> }>;
+  contacts: ContactInput[];
+  /** headsUpKey() of everything already sent. */
+  alreadySent: ReadonlySet<string>;
+}): PlannedHeadsUp[] {
+  const contactsById = new Map(input.contacts.map((c) => [c.id, c]));
+  const plans = new Map<string, PlannedHeadsUp>();
+  const planned = new Set<string>();
+  for (const rule of input.rules) {
+    if (!rule.enabled || !rule.forecastHeadsUp) continue;
+    for (const place of input.flagged) {
+      if (place.items.length === 0 || !ruleCoversImpact(rule, place)) continue;
+      const recipients =
+        rule.recipientMode === 'specific'
+          ? rule.contactIds.map((id) => contactsById.get(id)).filter((c): c is ContactInput => !!c && c.organizationId === place.organizationId)
+          : input.contacts.filter((c) => contactIsLinked(c, place));
+      for (const contact of recipients) {
+        if (!canReceive(contact, 'email')) continue;
+        for (const found of place.items) {
+          const item: HeadsUpItem = { propertyId: place.propertyId, day: found.day, concern: found.concern };
+          const key = headsUpKey(contact.id, item);
+          if (input.alreadySent.has(key) || planned.has(key)) continue;
+          planned.add(key);
+          let plan = plans.get(contact.id);
+          if (!plan) {
+            plan = { organizationId: place.organizationId, contactId: contact.id, ruleId: rule.id, items: [] };
+            plans.set(contact.id, plan);
+          }
+          plan.items.push(item);
+        }
+      }
+    }
+  }
+  return [...plans.values()];
 }
