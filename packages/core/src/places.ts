@@ -1,39 +1,54 @@
 /**
- * Phase 4: businesses inside a drawn area, from OpenStreetMap through the
- * Overpass API. Pure: validates the shape, builds the query, reads the reply.
+ * Businesses inside a drawn area or an alert. Pure: validates the shape and defines the
+ * categories and the shape of a result. The data is Overture Maps places, queried with
+ * DuckDB (see poi.ts for the query and apps/web/src/lib/overture.ts for running it).
  *
- * Verified against the live service and documentation on 2026-11-10:
- *   endpoint  https://overpass-api.de/api/interpreter (POST, form field "data")
- *   policy    https://dev.overpass-api.de/overpass-doc/en/preface/commons.html
- *             "a maximum of about 10000 requests per day" and under about 1 GB per day
- *   licence   OpenStreetMap data, ODbL: results must credit "© OpenStreetMap contributors"
+ * Categories are Overture's own top-level groups (taxonomy.hierarchy[1]), sampled from the
+ * live data on 2026-11-23.
  */
 
 export type LonLat = [number, number];
 
-export const PLACE_CATEGORIES = ['all', 'retail', 'food', 'office', 'lodging', 'health', 'automotive', 'trades', 'other'] as const;
+export const PLACE_CATEGORIES = ['all', 'services', 'retail', 'food', 'health', 'personal', 'lodging', 'travel', 'recreation', 'community'] as const;
 export type PlaceCategory = (typeof PLACE_CATEGORIES)[number];
 
 export const PLACE_CATEGORY_LABELS: Record<PlaceCategory, string> = {
   all: 'All businesses',
+  services: 'Business and professional services',
   retail: 'Shops and retail',
-  food: 'Restaurants and bars',
-  office: 'Offices and banks',
-  lodging: 'Hotels and lodging',
+  food: 'Restaurants, bars and food',
   health: 'Health care',
-  automotive: 'Automotive',
-  trades: 'Trades and workshops',
-  other: 'Leisure and other',
+  personal: 'Personal services (salons, pet care)',
+  lodging: 'Hotels and lodging',
+  travel: 'Fuel, parking and transport',
+  recreation: 'Sports, arts and entertainment',
+  community: 'Schools, worship and government',
 };
 
-export const PLACES_ATTRIBUTION = '© OpenStreetMap contributors';
-export const PLACES_NOTE =
-  'From OpenStreetMap, a volunteer-maintained map. Coverage varies by area: some businesses will be missing or out of date.';
+/** Which of Overture's top-level groups make up each category. */
+export const PLACE_CATEGORY_GROUPS: Record<Exclude<PlaceCategory, 'all'>, readonly string[]> = {
+  services: ['services_and_business'],
+  retail: ['shopping'],
+  food: ['food_and_drink'],
+  health: ['health_care'],
+  personal: ['lifestyle_services'],
+  lodging: ['lodging'],
+  travel: ['travel_and_transportation'],
+  recreation: ['sports_and_recreation', 'arts_and_entertainment'],
+  community: ['community_and_government', 'education', 'cultural_and_historic'],
+};
+/** Left out of "All businesses": lakes, bridges, beaches and the like. */
+export const NOT_A_BUSINESS_GROUPS: readonly string[] = ['geographic_entities'];
 
-/** Largest area that may be searched in one go, in square miles. Keeps each request small. */
-export const MAX_AREA_SQ_MILES = 100;
+export const PLACES_ATTRIBUTION = '© Overture Maps Foundation';
+export const PLACES_NOTE =
+  'From Overture Maps, an open dataset built from several sources. Some businesses will be missing, closed or out of date; check before relying on a listing.';
+
+/** Largest area that may be searched in one go, in square miles. */
+export const MAX_AREA_SQ_MILES = 500;
 export const MAX_VERTICES = 200;
-export const MAX_PLACES = 2000;
+/** Most businesses returned by one search. A dense city centre holds far more; the result then says it is partial. */
+export const MAX_PLACES = 5000;
 
 const EARTH_RADIUS_M = 6_371_008.8;
 const SQ_M_PER_SQ_MILE = 2_589_988.110336;
@@ -86,68 +101,13 @@ export function ringToPolygon(ring: LonLat[]): { type: 'Polygon'; coordinates: L
   return { type: 'Polygon', coordinates: [[...ring, ring[0]!]] };
 }
 
-// ------------------------------------------------------------------ what counts as a business
-
-const FOOD = ['restaurant', 'cafe', 'fast_food', 'bar', 'pub', 'food_court', 'ice_cream', 'biergarten'];
-const HEALTH = ['clinic', 'dentist', 'doctors', 'hospital', 'pharmacy', 'veterinary'];
-const AUTO_AMENITY = ['fuel', 'car_wash', 'car_rental', 'vehicle_inspection'];
-const OFFICE_AMENITY = ['bank', 'bureau_de_change', 'money_transfer'];
-const OTHER_AMENITY = ['cinema', 'theatre', 'nightclub', 'casino', 'childcare', 'events_venue', 'studio', 'driving_school', 'funeral_home', 'marketplace', 'conference_centre'];
-const LODGING = ['hotel', 'motel', 'guest_house', 'hostel', 'apartments', 'chalet', 'camp_site', 'caravan_site'];
-const LEISURE = ['fitness_centre', 'bowling_alley', 'sports_centre', 'golf_course', 'marina', 'amusement_arcade', 'trampoline_park', 'escape_game'];
-const AUTO_SHOP = ['car', 'car_repair', 'car_parts', 'tyres', 'motorcycle', 'truck', 'trailer'];
-
-/** Which category an OpenStreetMap feature belongs to, or null when it is not a business. */
-export function classifyPlace(tags: Record<string, string>): Exclude<PlaceCategory, 'all'> | null {
-  const { shop, amenity, office, craft, tourism, healthcare, leisure } = tags;
-  if (shop && shop !== 'vacant' && shop !== 'no') return AUTO_SHOP.includes(shop) ? 'automotive' : 'retail';
-  if (amenity) {
-    if (FOOD.includes(amenity)) return 'food';
-    if (HEALTH.includes(amenity)) return 'health';
-    if (AUTO_AMENITY.includes(amenity)) return 'automotive';
-    if (OFFICE_AMENITY.includes(amenity)) return 'office';
-    if (OTHER_AMENITY.includes(amenity)) return 'other';
-  }
-  if (healthcare) return 'health';
-  if (office && office !== 'no') return 'office';
-  if (craft) return 'trades';
-  if (tourism && LODGING.includes(tourism)) return 'lodging';
-  if (leisure && LEISURE.includes(leisure)) return 'other';
-  return null;
-}
-
-const any = (values: string[]) => `~"^(${values.join('|')})$"`;
-
-/** Overpass filters, per category. Every filter also requires a name: unnamed features are rarely businesses. */
-const SELECTORS: Record<Exclude<PlaceCategory, 'all'>, string[]> = {
-  retail: ['["shop"]'],
-  food: [`["amenity"${any(FOOD)}]`],
-  office: ['["office"]', `["amenity"${any(OFFICE_AMENITY)}]`],
-  lodging: [`["tourism"${any(LODGING)}]`],
-  health: ['["healthcare"]', `["amenity"${any(HEALTH)}]`],
-  automotive: [`["shop"${any(AUTO_SHOP)}]`, `["amenity"${any(AUTO_AMENITY)}]`],
-  trades: ['["craft"]'],
-  other: [`["leisure"${any(LEISURE)}]`, `["amenity"${any(OTHER_AMENITY)}]`],
-};
-
-/** The Overpass QL query for businesses of a category inside a ring. */
-export function buildOverpassQuery(ring: LonLat[], category: PlaceCategory, timeoutSeconds = 25): string {
-  // Overpass wants "lat lon" pairs; six decimals is about four inches.
-  const poly = ring.map(([lon, lat]) => `${lat.toFixed(6)} ${lon.toFixed(6)}`).join(' ');
-  const cats = category === 'all' ? (Object.keys(SELECTORS) as Array<keyof typeof SELECTORS>).filter((c) => c !== 'automotive') : [category];
-  // "automotive" shops are already matched by the retail ["shop"] filter when searching everything.
-  const selectors = [...new Set(cats.flatMap((c) => SELECTORS[c]))];
-  if (category === 'all') selectors.push(`["amenity"${any(AUTO_AMENITY)}]`);
-  const body = selectors.map((s) => `nwr["name"]${s}(poly:"${poly}");`).join('');
-  return `[out:json][timeout:${timeoutSeconds}];(${body});out center tags ${MAX_PLACES};`;
-}
-
-// ------------------------------------------------------------------ reading the reply
+// ------------------------------------------------------------------ a result
 
 export interface Place {
   id: string;
   name: string;
   category: Exclude<PlaceCategory, 'all'>;
+  /** The specific kind in plain words, e.g. "Gas station". */
   kind: string;
   address: string;
   city: string;
@@ -157,70 +117,11 @@ export interface Place {
   website: string;
   lon: number;
   lat: number;
-  url: string;
-}
-
-interface OverpassElement {
-  type?: string;
-  id?: number;
-  lat?: number;
-  lon?: number;
-  center?: { lat?: number; lon?: number };
-  tags?: Record<string, string>;
-}
-
-/** Only http(s) links are passed on; anything else in the data is dropped. */
-function safeUrl(value: string | undefined): string {
-  if (!value) return '';
-  const v = value.trim();
-  const withScheme = /^https?:\/\//i.test(v) ? v : /^[a-z0-9.-]+\.[a-z]{2,}(\/|$)/i.test(v) ? `https://${v}` : '';
-  try {
-    return withScheme ? new URL(withScheme).toString() : '';
-  } catch {
-    return '';
-  }
-}
-
-/** Turns an Overpass reply into businesses, dropping anything unnamed, unplaced or not a business. Sorted by name. */
-export function parseOverpass(reply: unknown, category: PlaceCategory = 'all'): Place[] {
-  const elements = (reply as { elements?: unknown })?.elements;
-  if (!Array.isArray(elements)) throw new Error('Unexpected reply from the business data service');
-  const seen = new Set<string>();
-  const out: Place[] = [];
-  for (const el of elements as OverpassElement[]) {
-    const tags = el.tags ?? {};
-    const name = tags.name?.trim();
-    const lat = el.lat ?? el.center?.lat;
-    const lon = el.lon ?? el.center?.lon;
-    if (!name || typeof lat !== 'number' || typeof lon !== 'number' || !el.type || el.id === undefined) continue;
-    const cat = classifyPlace(tags);
-    if (!cat || (category !== 'all' && cat !== category)) continue;
-    const id = `${el.type}/${el.id}`;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const kind = tags.shop ?? tags.amenity ?? tags.healthcare ?? tags.office ?? tags.craft ?? tags.tourism ?? tags.leisure ?? '';
-    out.push({
-      id,
-      name,
-      category: cat,
-      kind: kind.replace(/_/g, ' '),
-      address: [tags['addr:housenumber'], tags['addr:street']].filter(Boolean).join(' '),
-      city: tags['addr:city'] ?? '',
-      state: tags['addr:state'] ?? '',
-      zip: (tags['addr:postcode'] ?? '').slice(0, 10),
-      phone: tags.phone ?? tags['contact:phone'] ?? '',
-      website: safeUrl(tags.website ?? tags['contact:website']),
-      lon,
-      lat,
-      url: `https://www.openstreetmap.org/${id}`,
-    });
-  }
-  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export const DEFAULT_AREA_SEARCH_DAILY_CAP = 200;
 
-/** Most area searches an organization may run in a day, so the shared free service is not overused. */
+/** Most area searches an organization may run in a day. */
 export function readAreaSearchCap(settings: unknown): number {
   const v = ((settings ?? {}) as { areaSearchDailyCap?: unknown }).areaSearchDailyCap;
   return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.floor(v) : DEFAULT_AREA_SEARCH_DAILY_CAP;

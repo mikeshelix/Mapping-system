@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.8.0",
+    "@duckdb/node-api": "2.0.1-r.1",
     "@hazard/core": "workspace:*",
     "@hazard/db": "workspace:*",
     "dotenv": "^16.6.1",

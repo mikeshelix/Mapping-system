@@ -94,13 +94,10 @@ much it deliberates.
 
 ### Area search data
 
-Businesses come from OpenStreetMap through the Overpass API: free, no key, credited as "© OpenStreetMap contributors"
-(ODbL licence). The public server asks for at most about 10,000 requests and 1 GB a day in total, so searches are limited to
-100 square miles, 2,000 results and a daily count per organization (admin setting, default 200). It can be slow or refuse
-requests when busy; the app retries once and waits up to a minute. For production volume, run your own Overpass server
-and set `OVERPASS_URL`. OpenStreetMap is volunteer-maintained, so coverage varies and some businesses are missing.
-Overture Maps Places is a fuller alternative but is distributed as large data files rather than a query service; it would
-need to be loaded into PostGIS on a schedule.
+Businesses come from Overture Maps places, read in place with DuckDB (see "Businesses layer" below): free, open licence, no key.
+A search is limited to 500 square miles, 5,000 results and a daily count per organization (admin setting, default 200). Businesses
+Overture marks as permanently closed, or with confidence of 0.7 or less, are left out. A dense city centre can hold far more than
+5,000 businesses; the result then says it is partial and suggests picking a kind of business or a smaller area.
 
 ## The map screen
 
@@ -285,7 +282,7 @@ Twilio is a paid, usage-based service and US numbers must be registered (A2P 10D
   the map moved, and a request to delete, email and read other organizations was declined. Cost was $0.025 to $0.042
   per question on `claude-opus-5-5`. It has not been measured on a portfolio of thousands of properties, where
   lookups return more text and cost more.
-- The public Overpass server took 30 to 35 seconds per search and refused some requests while this was built.
+- Business search now reads Overture Maps; the earlier public OpenStreetMap server (30 to 35 seconds per search) is no longer used.
 
 ## Google place search in the assistant (demo)
 
@@ -312,3 +309,16 @@ A rule can also ask for **forecast heads-ups** (off by default). The worker then
 - Official watches and warnings are separate and still go out as alerts.
 
 Not yet measured: how long the first check takes for a portfolio of thousands of locations (new locations are looked up at most 2,000 per check).
+
+## Businesses layer (Overture Maps via DuckDB)
+
+The map's "Businesses" switch shows businesses and points of interest in the current view, from the Overture Maps places data (open licence, free, no key). There is no extra database and nothing is downloaded up front: DuckDB (`@duckdb/node-api`, running inside the web server) reads only the parts of Overture's public GeoParquet files that cover the view, over HTTPS.
+
+- **Latest data without a hardcoded date:** the release is read from `https://stac.overturemaps.org/catalog.json` (`latest`), then the places collection and its 16 file entries, each with a bounding box. Only files overlapping the view are queried. The list is cached for six hours.
+- **Query:** name, `basic_category`, confidence, position, first address, phone and website, where the view's bounding box matches, `confidence > 0.7`, `LIMIT 200`, most confident first. The optional filter matches name or category and is passed as a query parameter. Note: Overture removed `categories` in September 2026; `basic_category` replaces it.
+- **When it runs:** only with the switch on, at zoom 13 or closer, 0.4 seconds after the map stops moving. A newer request cancels the one before it.
+- **Speed (measured 2026-11-23):** 10 to 15 seconds the first time an area's file is touched after a server start, then about 0.3 to 5 seconds; a repeated view is answered from a one-hour cache in milliseconds.
+- **Start-up cost:** none. DuckDB loads on the first business request. On its first ever run on a machine it downloads its `httpfs` and `spatial` extensions from `extensions.duckdb.org`, so the server needs outbound HTTPS to that host and to `overturemaps-us-west-2.s3.us-west-2.amazonaws.com` and `stac.overturemaps.org`.
+- **Deployment:** `@duckdb/node-api` is a native module (listed in `serverExternalPackages`), so it must be installed on the server's own platform. DuckDB is limited to 1 GB of memory and four threads.
+
+"Find businesses in an area" and the alert button use the same data and the same DuckDB connection: every business inside the outline (`ST_Contains`), by name, filtered by Overture's top-level category group. Measured on central Houston: about 6,800 businesses in a 7 square mile triangle in 1 second once the file had been touched.
