@@ -322,3 +322,20 @@ The map's "Businesses" switch shows businesses and points of interest in the cur
 - **Deployment:** `@duckdb/node-api` is a native module (listed in `serverExternalPackages`), so it must be installed on the server's own platform. DuckDB is limited to 1 GB of memory and four threads.
 
 "Find businesses in an area" and the alert button use the same data and the same DuckDB connection: every business inside the outline (`ST_Contains`), by name, filtered by Overture's top-level category group. Measured on central Houston: about 6,800 businesses in a 7 square mile triangle in 1 second once the file had been touched.
+
+## Prospects
+
+The Clients page has a second tab, Prospects: businesses and locations a user wants to call on.
+
+- **Adding from the map.** Every business in an area search has a "+ Prospect" button, and "Add all to prospects" sends the whole list. Business pop-ups on the
+  map have "Add to prospects" too. The organization's own locations inside a searched area can be added the same way. A business is only ever on the list once
+  (matched on its Overture id), so pressing the button twice is harmless.
+- **Tracking.** Each prospect has a status (New, Called, Follow up, Interested, Not interested, Won), a follow-up date, notes, and an "I called them" button
+  that counts the call and stamps the date. Follow-ups that are due sort to the top.
+- **Getting the list out.** "Download list (CSV)" on the tab, or `/api/export/prospects`.
+- **What is stored.** Only open data from Overture Maps and what the user types. Nothing returned by Google's place search is ever stored.
+- **Connecting a sales system later.** The `prospects` table has an unused `external_ref` column for the id of the matching record in an outside CRM.
+  Nothing is sent anywhere yet.
+
+Business website links (in the area list, map pop-ups and the prospect list) open in a small separate window so the list behind them is not lost.
+Ctrl/Cmd-click still opens a normal tab.

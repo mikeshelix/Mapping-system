@@ -22,6 +22,7 @@ import {
 } from '@hazard/core';
 import type { MapAction } from '@hazard/db';
 import { POI_MIN_ZOOM, directionsUrl, poiCategoryLabel, type Poi } from '@hazard/core';
+import { addOutcomeText, addToProspects, type ProspectCandidate } from '@/lib/prospectsClient';
 import { AreaSearchPanel } from './AreaSearchPanel';
 import { AssistantPanel } from './AssistantPanel';
 import { LocationCard, type LocationDetail } from './LocationCard';
@@ -89,6 +90,12 @@ function escapeHtml(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** The "Add to prospects" button for a business pop-up. The business travels in the button itself; a listener on the page sends it. */
+function addProspectButton(item: ProspectCandidate): string {
+  if (!item.id || !item.name) return '';
+  return `<button type="button" class="popup-add" data-add-prospect="${escapeHtml(JSON.stringify(item))}">Add to prospects</button>`;
+}
+
 function toggled<T>(set: Set<T>, value: T): Set<T> {
   const next = new Set(set);
   if (next.has(value)) next.delete(value);
@@ -134,6 +141,8 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
   const [poiStatus, setPoiStatus] = useState<{ kind: 'zoom' | 'loading' | 'ok' | 'error'; text: string }>({ kind: 'zoom', text: '' });
   // Where the search area came from when it was taken from an alert, or why that failed.
   const [areaNotice, setAreaNotice] = useState<{ text: string; problem: boolean } | null>(null);
+  /** The alert the current search area came from, saved with prospects added from it. Empty for a drawn area. */
+  const [areaFoundIn, setAreaFoundIn] = useState('');
   // Changing this remounts the business panel, clearing an earlier result list.
   const [areaKey, setAreaKey] = useState(0);
 
@@ -147,6 +156,7 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
     setRing([]);
     setAreaKey((k) => k + 1);
     setDrawer('area');
+    setAreaFoundIn('');
     setAreaNotice({ text: `Working out the area of ${name}…`, problem: false });
     try {
       const res = await fetch(`/api/hazard/${eventId}/area?view=${[b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((n) => n.toFixed(5)).join(',')}`, { cache: 'no-store' });
@@ -160,6 +170,7 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
         return;
       }
       setRing(json.ring);
+      setAreaFoundIn(json.name ?? name);
       setAreaNotice({
         text:
           `Area taken from the alert: ${json.name ?? name}.` +
@@ -184,6 +195,35 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
   }, []);
   const openLocationRef = useRef(openLocation);
   openLocationRef.current = openLocation;
+
+  // ---- "Add to prospects" buttons inside map pop-ups, which are plain HTML rather than React
+  const areaFoundInRef = useRef(areaFoundIn);
+  areaFoundInRef.current = areaFoundIn;
+  useEffect(() => {
+    const onClick = (event: MouseEvent) => {
+      const button = (event.target as Element | null)?.closest?.('button[data-add-prospect]') as HTMLButtonElement | null;
+      if (!button || button.disabled) return;
+      let item: ProspectCandidate;
+      try {
+        item = JSON.parse(button.dataset.addProspect ?? '') as ProspectCandidate;
+      } catch {
+        return;
+      }
+      button.disabled = true;
+      button.textContent = 'Adding…';
+      addToProspects({ items: [item], foundIn: areaFoundInRef.current || 'Picked on the map' })
+        .then((outcome) => {
+          button.textContent = outcome.added ? 'Added to prospects ✓' : 'Already a prospect ✓';
+          button.title = addOutcomeText(outcome);
+        })
+        .catch(() => {
+          button.disabled = false;
+          button.textContent = 'Could not add. Try again';
+        });
+    };
+    document.addEventListener('click', onClick);
+    return () => document.removeEventListener('click', onClick);
+  }, []);
 
   // ---- map setup (once)
   useEffect(() => {
@@ -337,7 +377,7 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
         const [lon, lat] = (f.geometry as GeoJSON.Point).coordinates as [number, number];
         const directions = directionsUrl(lat, lon);
         const links = [
-          /^https?:\/\//i.test(p.website ?? '') ? `<a href="${escapeHtml(p.website!)}" target="_blank" rel="noreferrer noopener">Website</a>` : '',
+          /^https?:\/\//i.test(p.website ?? '') ? `<a href="${escapeHtml(p.website!)}" target="_blank" rel="noreferrer noopener" data-site-popup>Website</a>` : '',
           directions ? `<a href="${directions}" target="_blank" rel="noreferrer noopener">Directions</a>` : '',
         ].filter(Boolean);
         new maplibregl.Popup({ maxWidth: '300px' })
@@ -347,6 +387,7 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
               (p.address ? `<div>${escapeHtml(p.address)}</div>` : '') +
               (p.phone ? `<div>${escapeHtml(p.phone)}</div>` : '') +
               (links.length ? `<div style="margin-top:4px">${links.join(' · ')}</div>` : '') +
+              addProspectButton({ id: p.id ?? '', name: p.name ?? '', kind: p.category ? poiCategoryLabel(p.category) : '', address: p.address ?? '', phone: p.phone ?? '', website: p.website ?? '', lon, lat }) +
               `<div style="color:#6b7280;font-size:11px;margin-top:4px">Business data: Overture Maps</div>`,
           )
           .addTo(map);
@@ -388,14 +429,16 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
         if (!f) return;
         const p = f.properties as Record<string, string>;
         // Links come from public map data: only http(s) addresses are kept by the server, and all text is escaped here.
-        const link = (href: string, label: string) => (/^https?:\/\//i.test(href) ? `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener">${label}</a>` : '');
+        const link = (href: string, label: string, popup = false) =>
+          /^https?:\/\//i.test(href) ? `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer noopener"${popup ? ' data-site-popup' : ''}>${label}</a>` : '';
         new maplibregl.Popup({ maxWidth: '300px' })
           .setLngLat((f.geometry as GeoJSON.Point).coordinates as [number, number])
           .setHTML(
             `<strong>${escapeHtml(p.name ?? '')}</strong><div style="color:#6b7280">${escapeHtml(p.kind ?? '')}</div>` +
               `<div>${escapeHtml([p.address, p.city, p.state, p.zip].filter(Boolean).join(', '))}</div>` +
               (p.phone ? `<div>${escapeHtml(p.phone)}</div>` : '') +
-              `<div style="margin-top:4px">${[link(p.website ?? '', 'Website'), link(directionsUrl(Number(p.lat), Number(p.lon)) ?? '', 'Directions')].filter(Boolean).join(' · ')}</div>` +
+              `<div style="margin-top:4px">${[link(p.website ?? '', 'Website', true), link(directionsUrl(Number(p.lat), Number(p.lon)) ?? '', 'Directions')].filter(Boolean).join(' · ')}</div>` +
+              addProspectButton({ id: p.id ?? '', name: p.name ?? '', kind: p.kind ?? '', address: p.address ?? '', city: p.city ?? '', state: p.state ?? '', zip: p.zip ?? '', phone: p.phone ?? '', website: p.website ?? '', lon: Number(p.lon), lat: Number(p.lat) }) +
               `<div style="color:#6b7280;font-size:11px;margin-top:4px">Business data: Overture Maps</div>`,
           )
           .addTo(map);
@@ -1054,10 +1097,12 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
           <AreaSearchPanel
             key={areaKey}
             notice={areaNotice}
+            foundIn={areaFoundIn}
             ring={ring}
             drawing={drawing}
             onStartDrawing={() => {
               setAreaNotice(null);
+              setAreaFoundIn('');
               setRing([]);
               setPlaces([]);
               setDrawing(true);
@@ -1065,6 +1110,7 @@ export function MapView({ focusEventId }: { focusEventId: string | null }) {
             onFinishDrawing={() => setDrawing(false)}
             onClear={() => {
               setAreaNotice(null);
+              setAreaFoundIn('');
               setRing([]);
               setPlaces([]);
               setDrawing(false);

@@ -1,10 +1,36 @@
+import Link from 'next/link';
+import { isProspectStatus } from '@hazard/core';
 import { getSql } from '@hazard/db';
 import { requireUser } from '@/lib/auth';
 import { Flash, type Search } from '@/components/Flash';
+import { ProspectsTab } from '@/components/ProspectsTab';
 import { createClientAction, deleteClient, updateClientColor } from '@/app/actions/portfolio';
 
 export default async function ClientsPage({ searchParams }: { searchParams: Search }) {
   const user = await requireUser();
+  const { tab, status } = await searchParams;
+  const showProspects = tab === 'prospects';
+  const [{ n: prospectCount }] = (await getSql()`SELECT count(*)::int AS n FROM prospects WHERE organization_id = ${user.organizationId}`) as unknown as [{ n: number }];
+  const tabs = (
+    <nav className="tabs page-tabs" aria-label="Clients and prospects">
+      <Link href="/clients" className={showProspects ? '' : 'on'} aria-current={showProspects ? undefined : 'page'}>
+        Clients
+      </Link>
+      <Link href="/clients?tab=prospects" className={showProspects ? 'on' : ''} aria-current={showProspects ? 'page' : undefined}>
+        Prospects ({prospectCount})
+      </Link>
+    </nav>
+  );
+  if (showProspects) {
+    return (
+      <div className="page">
+        <h1>Clients and prospects</h1>
+        {tabs}
+        <Flash search={searchParams} />
+        <ProspectsTab organizationId={user.organizationId} status={isProspectStatus(status) ? status : null} />
+      </div>
+    );
+  }
   const clients = await getSql()`
     SELECT c.id, c.name, c.color,
       (SELECT count(*)::int FROM properties p WHERE p.client_id = c.id) AS properties,
@@ -13,7 +39,8 @@ export default async function ClientsPage({ searchParams }: { searchParams: Sear
 
   return (
     <div className="page">
-      <h1>Clients</h1>
+      <h1>Clients and prospects</h1>
+      {tabs}
       <Flash search={searchParams} />
       <div className="card">
         <h2>Add a client</h2>

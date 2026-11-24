@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import {
   estimateExposure,
   NOTIFIABLE_SEVERITIES,
+  PROSPECT_SOURCE_LABELS,
+  PROSPECT_STATUS_LABELS,
   readExposureFactors,
   SEVERITY_LABELS,
   SOURCE_NAMES,
@@ -9,7 +11,7 @@ import {
   type Severity,
   type SourceId,
 } from '@hazard/core';
-import { getSql } from '@hazard/db';
+import { getSql, listProspects } from '@hazard/db';
 import { getUser } from '@/lib/auth';
 import { isUuid } from '@/lib/form';
 
@@ -23,6 +25,7 @@ const EXPOSURE_HEADER = 'Estimated exposure USD (estimate only, not a damage ass
  *   /api/export/properties            every property
  *   /api/export/impacts               properties affected by active hazards (add ?days=90 for history)
  *   /api/export/exposure              one row per affected property with its estimated exposure
+ *   /api/export/prospects            the prospect list with its call tracking
  *   /api/export/assistant             every assistant question with its cost (admins only; add ?days=, default 90)
  * Optional filters: ?client=<id>, ?severity=<minimum>.
  */
@@ -95,6 +98,14 @@ export async function GET(request: Request, { params }: { params: Promise<{ kind
           iso(r.since), r.declared_value, severity === 'unknown' ? 0 : Math.round(factors[severity] * 1000) / 10,
           estimateExposure(r.declared_value, severity, factors)];
       }),
+    );
+  } else if (kind === 'prospects') {
+    const rows = await listProspects(sql, org, null, 50000);
+    csv = toCsv(
+      ['Name', 'Type', 'Address', 'City', 'State', 'ZIP', 'Phone', 'Website', 'Status', 'Calls logged', 'Last called', 'Follow up on', 'Notes', 'Where it came from',
+        'Found in', 'Added by', 'Added', 'Latitude', 'Longitude'],
+      rows.map((r) => [r.name, r.kind, r.address, r.city, r.state, r.zip, r.phone, r.website, PROSPECT_STATUS_LABELS[r.status], r.calls, iso(r.lastContactedAt),
+        r.followUpOn, r.notes, PROSPECT_SOURCE_LABELS[r.source], r.foundIn, r.addedBy, iso(r.createdAt), r.lat, r.lon]),
     );
   } else if (kind === 'assistant') {
     if (user.role !== 'admin') return NextResponse.json({ error: 'Admins only' }, { status: 403 });

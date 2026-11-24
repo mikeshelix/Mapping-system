@@ -19,7 +19,7 @@ const SECTIONS: Section[] = [
   {
     label: 'Portfolio',
     items: [
-      { href: '/clients', label: 'Clients' },
+      { href: '/clients', label: 'Clients & prospects' },
       { href: '/properties', label: 'Locations' },
       { href: '/contacts', label: 'Contacts' },
       { href: '/import', label: 'Import a list' },

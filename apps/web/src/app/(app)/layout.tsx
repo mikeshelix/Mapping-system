@@ -2,6 +2,7 @@ import { getFeedHealth, getSql } from '@hazard/db';
 import { requireUser } from '@/lib/auth';
 import { logout } from '@/app/actions/auth';
 import { MainNav, SubNav } from '@/components/Nav';
+import { SitePopupLinks } from '@/components/SitePopupLinks';
 
 export const dynamic = 'force-dynamic';
 
@@ -20,6 +21,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="shell">
+      <SitePopupLinks />
       <nav className="topbar">
         <span className="brand">Hazard Alerts</span>
         <MainNav isAdmin={user.role === 'admin'} />
